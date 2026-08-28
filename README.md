@@ -521,6 +521,12 @@ razonable en localhost.
 Compute), y `vercel.json` rutea todo el trafico ahi. Las rutas viven en `src/app.ts`, compartidas
 con el arranque local.
 
+`vercel.json` usa `builds` + `routes` y no `functions` + `rewrites` a proposito: con zero-config
+Vercel detecta `src/app.ts` como entrypoint de servidor y le arma una segunda lambda que se queda
+con `/`. Como ese modulo no tiene default export, la lambda muere al importarse y `/` responde
+`FUNCTION_INVOCATION_FAILED`. Declarar `builds` desactiva la deteccion automatica. Ojo que el
+`dest` lleva la extension (`/api/index.ts`): sin ella todo responde 404.
+
 ```sh
 vercel link --scope <equipo> --project node-relayer
 vercel env add NODE_PRIVATE_KEY production      # y el resto de .env.example
