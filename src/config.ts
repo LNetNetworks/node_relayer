@@ -145,15 +145,6 @@ export const config = {
   reorderWindowMs: Number(process.env.REORDER_WINDOW_MS ?? 3_000),
 
   /**
-   * Secreto compartido que exigen los endpoints que gastan gas (`POST /relay`, el JSON-RPC y el
-   * WebSocket). Vacio los deja abiertos, que es lo razonable en localhost. En una URL publica
-   * dejarlo vacio significa que cualquiera que la encuentre gasta el gas del writer node.
-   * HTTP: `Authorization: Bearer <secreto>`. WebSocket: `?token=<secreto>` en la URL, porque el
-   * WebSocket del browser no deja mandar cabeceras en el handshake.
-   */
-  apiSecret: process.env.RELAY_API_SECRET?.trim() ?? '',
-
-  /**
    * Origen permitido por CORS, para que un dapp de browser pueda apuntar su provider aca.
    * Vacio desactiva las cabeceras (util si hay un gateway adelante que ya las pone).
    */

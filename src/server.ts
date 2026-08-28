@@ -43,7 +43,6 @@ async function main() {
     `  writer node  : ${info.nodePermitted === null ? 'sin chequear' : info.nodePermitted ? 'permisionado' : 'NO PERMISIONADO'}`,
   );
   console.log(`  sender       : ${info.enforceAccountRules ? 'se exige permissioning' : 'no se valida'}`);
-  console.log(`auth           : ${config.apiSecret === '' ? 'abierta (sin RELAY_API_SECRET)' : 'bearer token'}`);
 
   // Servidor HTTP explicito para poder colgarle el WebSocket en el mismo puerto.
   const server = createServer(app);

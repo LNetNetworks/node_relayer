@@ -13,7 +13,6 @@
  */
 import { IncomingMessage, Server } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
-import { timingSafeEqual } from 'crypto';
 import type { Config } from './config';
 import { JsonRpcResponse, RpcProxy } from './rpc-proxy';
 
@@ -252,18 +251,7 @@ export function attachWsProxy(
 ): { wsUrl: string } {
   const getProxy = typeof proxy === 'function' ? proxy : async () => proxy;
   const wsUrl = cfg.wsUrl;
-  // Por el WS tambien entran escrituras (eth_sendRawTransaction), asi que lleva el mismo secreto
-  // que el HTTP. Va por query param porque el WebSocket del browser no manda cabeceras.
-  const wss = new WebSocketServer({
-    server,
-    verifyClient: ({ req }: { req: IncomingMessage }) => {
-      if (cfg.apiSecret === '') return true;
-      const token = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token') ?? '';
-      const ok = token.length === cfg.apiSecret.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.apiSecret));
-      if (!ok) console.warn('[ws] handshake rechazado: token invalido');
-      return ok;
-    },
-  });
+  const wss = new WebSocketServer({ server });
   let seq = 0;
 
   wss.on('connection', (client: WebSocket, req: IncomingMessage) => {

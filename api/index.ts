@@ -7,7 +7,7 @@
  * ADVERTENCIA: este relayer fue disenado para correr como instancia unica (ver "Supuesto: una
  * sola instancia" en el README). El tracker de nonces vive en memoria del proceso, asi que si
  * Vercel escala a mas de una instancia dos de ellas pueden firmar el mismo nonce con la misma
- * clave de writer node. Desplegado aca a sabiendas y con RELAY_API_SECRET puesto.
+ * clave de writer node. Desplegado aca a sabiendas.
  */
 import { createServer } from 'http';
 import { config } from '../src/config';
