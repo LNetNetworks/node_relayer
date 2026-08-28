@@ -55,6 +55,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('No se pudo arrancar el relayer:', err);
+  console.error('Could not start the relayer:', err);
   process.exit(1);
 });

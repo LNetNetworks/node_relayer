@@ -89,7 +89,7 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
   app.post('/relay', async (req: Request, res: Response) => {
     const rawTx = req.body?.rawTx ?? req.body?.signedTransaction;
     if (typeof rawTx !== 'string' || !isHexString(rawTx)) {
-      res.status(400).json({ error: 'Se espera { "rawTx": "0x..." }' });
+      res.status(400).json({ error: 'Expected { "rawTx": "0x..." }' });
       return;
     }
     try {
@@ -99,11 +99,11 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
       res.json(result);
     } catch (err) {
       if (err instanceof RelayError) {
-        console.warn(`[relay] rechazada (${err.code}): ${err.message}`);
+        console.warn(`[relay] rejected (${err.code}): ${err.message}`);
         res.status(400).json({ error: err.message, code: err.code, details: err.details ?? null });
         return;
       }
-      console.error('[relay] error inesperado', err);
+      console.error('[relay] unexpected error', err);
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -119,7 +119,7 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
       }
       res.json(result);
     } catch (err) {
-      console.error('[rpc] error inesperado', err);
+      console.error('[rpc] unexpected error', err);
       res.json({ jsonrpc: '2.0', id: null, error: { code: -32603, message: (err as Error).message } });
     }
   });

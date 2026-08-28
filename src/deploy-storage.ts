@@ -41,7 +41,7 @@ function parseArgs(argv: string[]) {
 const step = (n: number, msg: string) => console.log(`\n[${n}] ${msg}`);
 const ok = (msg: string) => console.log(`    ok  ${msg}`);
 const fail = (msg: string) => {
-  console.error(`    FALLA  ${msg}`);
+  console.error(`    FAIL  ${msg}`);
   process.exitCode = 1;
 };
 
@@ -53,7 +53,7 @@ async function main() {
 
   if (!privateKey) {
     throw new Error(
-      'Falta USER_PRIVATE_KEY en el .env (es la cuenta del usuario final, no necesita fondos)',
+      'Missing USER_PRIVATE_KEY in .env (the end user account, it needs no funds)',
     );
   }
 
@@ -68,50 +68,50 @@ async function main() {
     args.forwarder ?? process.env.TRUSTED_FORWARDER ?? info.relayHubProxyAddress,
   );
 
-  console.log('--- prueba de deploy por metatx ---');
+  console.log('--- deploy-by-metatx test ---');
   console.log(`relayer          : ${relayerUrl}`);
   console.log(`writer node      : ${info.nodeAddress}`);
   console.log(`RelayHub         : ${info.relayHubAddress}`);
   console.log(`trustedForwarder : ${forwarder}`);
-  console.log(`usuario          : ${client.address}`);
-  console.log(`contrato         : ${artifact.contractName} (${(artifact.bytecode.length - 2) / 2} bytes de initcode)`);
+  console.log(`user             : ${client.address}`);
+  console.log(`contract         : ${artifact.contractName} (${(artifact.bytecode.length - 2) / 2} bytes of initcode)`);
 
-  step(1, 'deploy de Storage por deployMetaTx');
+  step(1, 'deploying Storage through deployMetaTx');
   const deploy = await client.deploy({
     bytecode: artifact.bytecode,
     abi: artifact.abi,
     args: [forwarder],
   });
-  console.log(`    tx del relayer  : ${deploy.transactionHash}`);
-  console.log(`    bloque          : ${deploy.blockNumber}`);
-  console.log(`    eventos del hub : ${deploy.events.join(', ') || 'ninguno'}`);
+  console.log(`    relayer tx      : ${deploy.transactionHash}`);
+  console.log(`    block           : ${deploy.blockNumber}`);
+  console.log(`    hub events      : ${deploy.events.join(', ') || 'none'}`);
   if (!deploy.deployedAddress) {
-    fail('el hub no emitio ContractDeployed: no hay direccion de contrato');
+    fail('the hub did not emit ContractDeployed: no contract address');
     return;
   }
   const storage = getAddress(deploy.deployedAddress);
   ok(`Storage desplegado en ${storage}`);
 
-  step(2, 'owner() debe ser el usuario (verifica _msgSender via el forwarder)');
+  step(2, 'owner() must be the user (verifies _msgSender through the forwarder)');
   const [owner] = await client.read(storage, 'owner() view returns (address)');
   getAddress(owner) === client.address
     ? ok(`owner = ${owner}`)
-    : fail(`owner = ${owner}, se esperaba ${client.address} (revisar trustedForwarder)`);
+    : fail(`owner = ${owner}, expected ${client.address} (check trustedForwarder)`);
 
   step(3, `store(${newValue}) por relayMetaTx`);
   const call = await client.call(storage, 'store(uint256)', [newValue]);
-  console.log(`    tx del relayer  : ${call.transactionHash}`);
-  console.log(`    ejecutada       : ${call.executed}`);
-  console.log(`    eventos del hub : ${call.events.join(', ') || 'ninguno'}`);
-  call.executed ? ok('el hub relayo y el contrato no revirtio') : fail('la llamada no se ejecuto');
+  console.log(`    relayer tx      : ${call.transactionHash}`);
+  console.log(`    executed        : ${call.executed}`);
+  console.log(`    hub events      : ${call.events.join(', ') || 'none'}`);
+  call.executed ? ok('the hub relayed and the contract did not revert') : fail('the call was not executed');
 
-  step(4, 'retrieve() debe devolver el valor guardado');
+  step(4, 'retrieve() must return the stored value');
   const [stored] = await client.read(storage, 'retrieve() view returns (uint256)');
-  BigInt(stored) === newValue ? ok(`retrieve() = ${stored}`) : fail(`retrieve() = ${stored}, se esperaba ${newValue}`);
+  BigInt(stored) === newValue ? ok(`retrieve() = ${stored}`) : fail(`retrieve() = ${stored}, expected ${newValue}`);
 
   console.log(
     process.exitCode
-      ? '\nla prueba termino con fallas'
+      ? '\nthe test finished with failures'
       : `\nprueba OK - Storage en ${storage}, valor ${newValue}, el usuario no pago gas`,
   );
 }

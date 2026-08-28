@@ -45,8 +45,8 @@ async function waitWithTimeout(
       () =>
         reject(
           new RelayError(
-            `La tx ${sent.hash} no se mino en ${timeoutMs} ms. El nonce del writer node quedo consumido: ` +
-              'revisar el txpool del nodo antes de reintentar.',
+            `Transaction ${sent.hash} was not mined within ${timeoutMs} ms. The writer node nonce is ` +
+              'already consumed: check the node txpool before retrying.',
             'RECEIPT_TIMEOUT',
             { transactionHash: sent.hash },
           ),
@@ -261,17 +261,17 @@ export class Relayer {
     } catch (err) {
       if (cfg.enforceAccountRules) {
         throw new Error(
-          `ENFORCE_ACCOUNT_RULES=true pero no se pudo resolver AccountRules: ${upstreamMessage(err)}`,
+          `ENFORCE_ACCOUNT_RULES=true but AccountRules could not be resolved: ${upstreamMessage(err)}`,
         );
       }
-      console.warn(`[permissioning] no se pudo resolver AccountRules: ${upstreamMessage(err)}`);
+      console.warn(`[permissioning] could not resolve AccountRules: ${upstreamMessage(err)}`);
       return null;
     }
     if (rules === null && cfg.enforceAccountRules) {
       throw new Error(
-        'ENFORCE_ACCOUNT_RULES=true pero esta cadena no expone AccountRules ' +
-          `(AccountIngress ${cfg.accountIngressAddress ?? 'sin configurar'}). ` +
-          'Configura ACCOUNT_RULES_ADDRESS o apaga la validacion.',
+        'ENFORCE_ACCOUNT_RULES=true but this chain does not expose AccountRules ' +
+          `(AccountIngress ${cfg.accountIngressAddress ?? 'not configured'}). ` +
+          'Set ACCOUNT_RULES_ADDRESS or turn the check off.',
       );
     }
     return rules;
@@ -314,22 +314,22 @@ export class Relayer {
    */
   private async checkNodePermissioning(): Promise<void> {
     if (this.accountRules === null) {
-      console.warn('[permissioning] la cadena no expone AccountRules: no se chequea el writer node');
+      console.warn('[permissioning] the chain does not expose AccountRules: the writer node is not checked');
       return;
     }
     try {
       this.nodePermitted = await this.accountRules.permitted(this.nodeAddress);
     } catch (err) {
       console.warn(
-        `[permissioning] no se pudo leer AccountRules (${this.accountRules.address}): ${upstreamMessage(err)}`,
+        `[permissioning] could not read AccountRules (${this.accountRules.address}): ${upstreamMessage(err)}`,
       );
       return;
     }
     if (!this.nodePermitted) {
       console.warn(
-        `[permissioning] ${this.nodeAddress} NO esta en AccountRules (${this.accountRules.address}): ` +
-          'si el nodo aplica permissioning de cuentas va a rechazar todos los relayMetaTx con ' +
-          '"not authorized". Hay que darlo de alta (addAccount) ademas de addNode en el hub.',
+        `[permissioning] ${this.nodeAddress} is NOT in AccountRules (${this.accountRules.address}): ` +
+          'if the node enforces account permissioning it will reject every relayMetaTx with ' +
+          '"not authorized". It must be registered (addAccount) on top of addNode on the hub.',
       );
     }
   }
@@ -350,13 +350,13 @@ export class Relayer {
     } catch (err) {
       // Fail closed: si el allowlist no se puede leer, no se relaya.
       throw new RelayError(
-        `No se pudo consultar AccountRules (${rules.address}): ${upstreamMessage(err)}`,
+        `Could not query AccountRules (${rules.address}): ${upstreamMessage(err)}`,
         'PERMISSIONING_UNAVAILABLE',
       );
     }
     if (!permitted) {
       throw new RelayError(
-        `${from} no esta permisionado en AccountRules (${rules.address})`,
+        `${from} is not permitted in AccountRules (${rules.address})`,
         'SENDER_NOT_PERMITTED',
         { accountRules: rules.address, account: from },
       );
@@ -487,26 +487,26 @@ export class Relayer {
     try {
       tx = Transaction.from(rawTx);
     } catch (err) {
-      throw new RelayError(`No se pudo deserializar la raw tx: ${(err as Error).message}`, 'BAD_RAW_TX');
+      throw new RelayError(`Could not deserialize the raw tx: ${(err as Error).message}`, 'BAD_RAW_TX');
     }
 
     const problems = validateMetaTxShape(tx);
     if (problems.length > 0) {
-      throw new RelayError(`La metatx no cumple el modelo de gas: ${problems.join('; ')}`, 'BAD_META_TX', problems);
+      throw new RelayError(`The metatx does not match the gas model: ${problems.join('; ')}`, 'BAD_META_TX', problems);
     }
     const from = tx.from!;
     const { nodeAddress, expiration } = decodeGasModelSuffix(tx.data);
 
     if (this.cfg.enforceNodeAddress && nodeAddress !== this.nodeAddress) {
       throw new RelayError(
-        `La metatx apunta al node ${nodeAddress} y este relayer es ${this.nodeAddress}`,
+        `The metatx targets node ${nodeAddress} but this relayer is ${this.nodeAddress}`,
         'WRONG_NODE_ADDRESS',
       );
     }
     const now = BigInt(Math.floor(Date.now() / 1000));
     if (this.cfg.enforceExpiration) {
       if (expiration <= now) {
-        throw new RelayError(`La metatx expiro (expiration=${expiration}, ahora=${now})`, 'EXPIRED');
+        throw new RelayError(`The metatx has expired (expiration=${expiration}, now=${now})`, 'EXPIRED');
       }
       // Una expiration al filo no sirve: entre validar, simular, esperar el turno del nonce y
       // minar pasan segundos, y si vence en el medio ya se gasto una tx del writer node.
@@ -520,8 +520,8 @@ export class Relayer {
       const floor = minimum > tolerance ? minimum - tolerance : 0n;
       if (remaining < floor) {
         throw new RelayError(
-          `expiration too low: la metatx expira en ${remaining} s y el minimo es ${minimum} s ` +
-            `(tolerancia ${tolerance} s por latencia; expiration=${expiration}, ahora=${now})`,
+          `expiration too low: the metatx expires in ${remaining} s and the minimum is ${minimum} s ` +
+            `(${tolerance} s tolerance for latency; expiration=${expiration}, now=${now})`,
           'EXPIRATION_TOO_LOW',
           {
             expiration: Number(expiration),
@@ -600,7 +600,7 @@ export class Relayer {
     }
     if (receipt == null) {
       this.forgetInflight(from);
-      throw new RelayError(`No se obtuvo receipt para ${sent.hash}`, 'NO_RECEIPT');
+      throw new RelayError(`No receipt obtained for ${sent.hash}`, 'NO_RECEIPT');
     }
 
     const parsed = this.parseHubLogs(receipt);
@@ -616,8 +616,8 @@ export class Relayer {
       // executed=false, y ahi el nonce si avanza y la cadena sigue sana.)
       this.forgetInflight(from);
       console.warn(
-        `[relay] el hub rechazo ${receipt.hash} (${errorCodeName(errorCode)}) para ${from}: ` +
-          'se descartan los nonces reservados, las metatx encadenadas posteriores van a fallar',
+        `[relay] the hub rejected ${receipt.hash} (${errorCodeName(errorCode)}) for ${from}: ` +
+          'reserved nonces are dropped, any chained metatx after this one will fail',
       );
     }
 
@@ -675,8 +675,8 @@ export class Relayer {
 
     if (entry && entry.pending >= this.cfg.maxInflightPerUser) {
       throw new RelayError(
-        `${from} ya tiene ${entry.pending} metatx en vuelo (maximo ${this.cfg.maxInflightPerUser}). ` +
-          'Esperar a que se minen antes de mandar mas.',
+        `${from} already has ${entry.pending} metatx in flight (maximum ${this.cfg.maxInflightPerUser}). ` +
+          'Wait for them to be mined before sending more.',
         'TOO_MANY_INFLIGHT',
         { pending: entry.pending, max: this.cfg.maxInflightPerUser },
       );
@@ -686,7 +686,7 @@ export class Relayer {
     const expectedNonce = entry ? entry.next : await this.getNonce(from);
     if (expectedNonce !== BigInt(tx.nonce)) {
       throw new RelayError(
-        `Nonce invalido: el RelayHub espera ${expectedNonce} para ${from} y la metatx trae ${tx.nonce}`,
+        `Invalid nonce: the RelayHub expects ${expectedNonce} for ${from} but the metatx carries ${tx.nonce}`,
         'BAD_NONCE',
         { expected: Number(expectedNonce), got: tx.nonce, pending: entry?.pending ?? 0 },
       );
@@ -708,11 +708,11 @@ export class Relayer {
         errorCode = Number(isDeploy ? result[0] : result);
         if (isDeploy) simulatedAddress = getAddress(result[1] as string);
       } catch (err) {
-        throw new RelayError(`La simulacion de ${method} fallo: ${(err as Error).message}`, 'SIMULATION_FAILED');
+        throw new RelayError(`Simulating ${method} failed: ${(err as Error).message}`, 'SIMULATION_FAILED');
       }
       if (errorCode !== ERROR_CODE_OK) {
         throw new RelayError(
-          `El RelayHub rechazaria la metatx: ${errorCodeName(errorCode)}`,
+          `The RelayHub would reject the metatx: ${errorCodeName(errorCode)}`,
           `HUB_${errorCodeName(errorCode).toUpperCase()}`,
           { errorCode, errorCodeName: errorCodeName(errorCode) },
         );
@@ -730,12 +730,12 @@ export class Relayer {
       const message = upstreamMessage(err);
       const hint = /not authorized|not permitted|permission/i.test(message)
         ? this.nodePermitted === false
-          ? ` ${this.nodeAddress} no esta en AccountRules (${this.accountRules?.address}): darlo de alta con addAccount ahi, y con addNode en el hub.`
-          : ` El nodo rechazo la transaccion del relayer: ${this.nodeAddress} tiene que ser un writer node permisionado (addNode en el hub + account permissioning).`
+          ? ` ${this.nodeAddress} is not in AccountRules (${this.accountRules?.address}): register it with addAccount there, and with addNode on the hub.`
+          : ` The node rejected the relayer transaction: ${this.nodeAddress} must be a permissioned writer node (addNode on the hub + account permissioning).`
         : /insufficient funds/i.test(message)
-          ? ' Revisar que la red use gasPrice 0 (en LAC-NET el writer node no necesita saldo).'
+          ? ' Check that the network uses gasPrice 0 (on LAC-NET the writer node needs no balance).'
           : '';
-      throw new RelayError(`No se pudo enviar ${method}: ${message}.${hint}`, 'SEND_FAILED');
+      throw new RelayError(`Could not send ${method}: ${message}.${hint}`, 'SEND_FAILED');
     }
 
     let chain = entry;

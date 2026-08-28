@@ -72,7 +72,7 @@ export class AccountRules {
     if (opts.accountRulesAddress) {
       const address = getAddress(opts.accountRulesAddress);
       if ((await provider.getCode(address)) === '0x') {
-        throw new Error(`ACCOUNT_RULES_ADDRESS=${address} no tiene codigo en esta cadena`);
+        throw new Error(`ACCOUNT_RULES_ADDRESS=${address} has no code on this chain`);
       }
       return new AccountRules(new Contract(address, ACCOUNT_RULES_ABI, provider), address, 'config', opts.cacheMs);
     }

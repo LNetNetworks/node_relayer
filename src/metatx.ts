@@ -75,12 +75,12 @@ export async function rpcRequest<T = any>(
 
 export async function rpcCall<T = any>(url: string, method: string, params: unknown[]): Promise<T> {
   const body = await rpcRequest<T>(url, method, params);
-  if (body.error) throw new Error(`${method} fallo: ${body.error.message} (code ${body.error.code})`);
+  if (body.error) throw new Error(`${method} failed: ${body.error.message} (code ${body.error.code})`);
   return body.result as T;
 }
 
 function relayFailure(status: number, body: RelayErrorBody): Error {
-  return new Error(`El relayer rechazo la metatx [${body.code ?? status}]: ${body.error}`);
+  return new Error(`The relayer rejected the metatx [${body.code ?? status}]: ${body.error}`);
 }
 
 /**
@@ -139,7 +139,7 @@ export class MetaTxClient {
     if (this.cachedInfo === null) {
       this.cachedInfo = (async () => {
         const res = await fetch(new URL('/info', this.relayerUrl));
-        if (!res.ok) throw new Error(`GET /info devolvio ${res.status}`);
+        if (!res.ok) throw new Error(`GET /info returned ${res.status}`);
         return (await res.json()) as RelayerInfo;
       })();
       this.cachedInfo.catch(() => {
@@ -192,7 +192,7 @@ export class MetaTxClient {
 
   private async getNonceBody(): Promise<{ nonce: string; nextNonce?: string; pending?: number }> {
     const res = await fetch(new URL(`/nonce/${this.address}`, this.relayerUrl));
-    if (!res.ok) throw new Error(`GET /nonce devolvio ${res.status}`);
+    if (!res.ok) throw new Error(`GET /nonce returned ${res.status}`);
     return (await res.json()) as { nonce: string; nextNonce?: string; pending?: number };
   }
 
@@ -318,7 +318,7 @@ export class MetaTxClient {
         status: 504,
         // Mismo codigo que usa el relayer cuando se le vence la espera, para que el caller no
         // tenga que distinguir de que lado se agoto el tiempo.
-        body: { code: 'RECEIPT_TIMEOUT', error: `la metatx ${hash} no se mino en ${timeoutMs} ms` },
+        body: { code: 'RECEIPT_TIMEOUT', error: `metatx ${hash} was not mined within ${timeoutMs} ms` },
       };
     }
 
@@ -409,7 +409,7 @@ export class MetaTxClient {
   }): Promise<RelayResponse> {
     let initcode = params.bytecode.startsWith('0x') ? params.bytecode : '0x' + params.bytecode;
     if (params.args?.length) {
-      if (!params.abi) throw new Error('Para pasar args del constructor hace falta la abi');
+      if (!params.abi) throw new Error('Passing constructor args requires the abi');
       const iface = new Interface(params.abi);
       initcode += iface.encodeDeploy(params.args).slice(2);
     }

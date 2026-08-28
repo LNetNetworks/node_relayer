@@ -168,7 +168,7 @@ rafaga y las metatx por bloque, no el numero por metatx.
 | `reintentos N` (detalle) | cuantas refirmas necesito esa metatx |
 | `refirmas por BAD_NONCE` | total de la corrida. En una rafaga sana de un solo cliente deberia ser 0 |
 
-Sale con **codigo 0 si todo paso** y **1 si alguna verificacion fallo** (`FALLA` en la salida), asi
+Sale con **codigo 0 si todo paso** y **1 si alguna verificacion fallo** (`FAIL` en la salida), asi
 que sirve tal cual en CI. Las lineas `info` no marcan falla: son datos.
 
 Medido en open-protestnet: **16/16 en 5 bloques** con un usuario y **24/24 con 3 usuarios**.

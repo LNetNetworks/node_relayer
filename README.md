@@ -124,7 +124,7 @@ npm run test:deploy -- --forwarder 0xProxy --value 7  # forwarder explicito
 
 `--forwarder` y `--value` pisan a `TRUSTED_FORWARDER` y al valor por default.
 
-**Que hace y que mirar.** Cada paso imprime `ok` o `FALLA`, y el proceso sale con codigo != 0
+**Que hace y que mirar.** Cada paso imprime `ok` o `FAIL`, y el proceso sale con codigo != 0
 si alguno falla:
 
 1. deploy de `Storage(trustedForwarder)` con `deployMetaTx` -> direccion del evento `ContractDeployed`

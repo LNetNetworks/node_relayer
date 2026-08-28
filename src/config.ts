@@ -26,8 +26,7 @@ export function assertConfigComplete(): void {
   const missing = missingConfig();
   if (missing.length > 0) {
     throw new Error(
-      `Falta${missing.length > 1 ? 'n' : ''} la${missing.length > 1 ? 's' : ''} variable${missing.length > 1 ? 's' : ''} ` +
-        `de entorno ${missing.join(', ')} (ver .env.example)`,
+      `Missing environment variable${missing.length > 1 ? 's' : ''} ${missing.join(', ')} (see .env.example)`,
     );
   }
 }

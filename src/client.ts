@@ -27,8 +27,8 @@ async function main() {
   const privateKey = process.env.USER_PRIVATE_KEY;
   const to = args.to ?? process.env.TARGET_ADDRESS;
 
-  if (!privateKey) throw new Error('Falta USER_PRIVATE_KEY en el .env');
-  if (!to) throw new Error('Falta el contrato destino: pasa --to 0x... o define TARGET_ADDRESS');
+  if (!privateKey) throw new Error('Missing USER_PRIVATE_KEY in .env');
+  if (!to) throw new Error('Missing target contract: pass --to 0x... or set TARGET_ADDRESS');
 
   const client = new MetaTxClient(privateKey, relayerUrl, {
     expirationSeconds: Number(process.env.EXPIRATION_SECONDS ?? 86_400),
@@ -49,7 +49,7 @@ async function main() {
 
   const [signature, ...callArgs] = args.rest;
   if (!signature) {
-    throw new Error('Pasa la funcion a llamar, p.ej. "store(uint256)" 42');
+    throw new Error('Pass the function to call, e.g. "store(uint256)" 42');
   }
 
   const nonce = await client.nonce();

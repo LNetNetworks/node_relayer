@@ -34,7 +34,7 @@ const envAddress = (name: string): string | undefined => {
 
 const ok = (msg: string) => console.log(`  ok  ${msg}`);
 const fail = (msg: string) => {
-  console.error(`  FALLA  ${msg}`);
+  console.error(`  FAIL  ${msg}`);
   process.exitCode = 1;
 };
 
@@ -52,14 +52,14 @@ async function main() {
   });
   const hub = new Contract(getAddress(relayHubAddress), RELAY_HUB_ABI, provider);
   console.log(`RelayHub ${relayHubAddress} (via ${source})`);
-  console.log(`gas disponible en el bloque: ${(await hub.getCurrentGasLimit()).toString()}\n`);
+  console.log(`gas available in the block: ${(await hub.getCurrentGasLimit()).toString()}\n`);
 
   // Claves dummy: solo se usan para firmar, nunca para enviar.
   const node = new Wallet('0x' + '22'.repeat(32));
   const user = new Wallet('0x' + '33'.repeat(32));
 
   const nonce: bigint = await hub.getNonce.staticCall(user.address, { from: node.address });
-  ok(`getNonce con from = node devuelve ${nonce}`);
+  ok(`getNonce with from = node returns ${nonce}`);
 
   const target = envAddress('TARGET_ADDRESS') ?? getAddress(relayHubAddress);
   const iface = new Interface(['function store(uint256)']);
@@ -83,24 +83,24 @@ async function main() {
   // A partir de aca hacemos exactamente lo que hace el relayer con la raw tx.
   const decoded = Transaction.from(rawTx);
   const problems = validateMetaTxShape(decoded);
-  problems.length === 0 ? ok('la metatx cumple la forma del modelo de gas') : fail(problems.join('; '));
+  problems.length === 0 ? ok('the metatx matches the gas model shape') : fail(problems.join('; '));
   decoded.from === user.address
-    ? ok(`from recuperado de la firma: ${decoded.from}`)
+    ? ok(`from recovered from the signature: ${decoded.from}`)
     : fail(`from recuperado ${decoded.from} != ${user.address}`);
 
   const suffix = decodeGasModelSuffix(decoded.data);
   suffix.nodeAddress === node.address && suffix.innerData === inner
-    ? ok(`sufijo (nodeAddress, expiration) = (${suffix.nodeAddress}, ${suffix.expiration})`)
-    : fail('el sufijo del modelo de gas no se decodifica bien');
+    ? ok(`suffix (nodeAddress, expiration) = (${suffix.nodeAddress}, ${suffix.expiration})`)
+    : fail('the gas model suffix does not decode correctly');
 
   const signingData = decoded.unsignedSerialized;
   signingData === tx.unsignedSerialized
-    ? ok('signingData = RLP de 6 campos, identico antes y despues de serializar')
-    : fail('signingData no hace round-trip');
+    ? ok('signingData = 6-field RLP, identical before and after serializing')
+    : fail('signingData does not round-trip');
 
   const { v, r, s } = decoded.signature!;
   const gasLimit = metaTxGasLimit(decoded.data, decoded.gasLimit);
-  ok(`v = ${v} (27/28 => firma no EIP-155, como pide el hub)`);
+  ok(`v = ${v} (27/28 => non-EIP-155 signature, as the hub requires)`);
   ok(`metaTxGasLimit = ${gasLimit}`);
 
   const code: bigint = await hub.relayMetaTx.staticCall(gasLimit, signingData, v, r, s, {
@@ -109,8 +109,8 @@ async function main() {
     gasLimit,
   });
   Number(code) === ERROR_CODE_OK
-    ? ok(`el RelayHub responde ${errorCodeName(code)}: aceptaria esta metatx`)
-    : fail(`el RelayHub responde ${errorCodeName(code)}`);
+    ? ok(`the RelayHub answers ${errorCodeName(code)}: it would accept this metatx`)
+    : fail(`the RelayHub answers ${errorCodeName(code)}`);
 
   // ---- mismo chequeo para el camino de deploy (deployMetaTx, to = null) ----
   console.log('\ndeploy (deployMetaTx):');
@@ -136,8 +136,8 @@ async function main() {
   deployTx.signature = user.signingKey.sign(deployTx.unsignedHash);
   const deployDecoded = Transaction.from(deployTx.serialized);
   deployDecoded.to === null && deployDecoded.from === user.address
-    ? ok('metatx de deploy: to vacio en el RLP y from recuperado de la firma')
-    : fail('la metatx de deploy no hace round-trip');
+    ? ok('deploy metatx: empty to in the RLP and from recovered from the signature')
+    : fail('the deploy metatx does not round-trip');
 
   const deployGasLimit = metaTxGasLimit(deployDecoded.data, deployDecoded.gasLimit);
   const deploySig = deployDecoded.signature!;
@@ -151,14 +151,14 @@ async function main() {
   );
   const wouldDeployAt = getAddress(deployResult[1] as string);
   Number(deployResult[0]) === ERROR_CODE_OK && wouldDeployAt !== ZeroAddress
-    ? ok(`el hub responde ${errorCodeName(deployResult[0])} y crearia el contrato en ${wouldDeployAt}`)
+    ? ok(`the hub answers ${errorCodeName(deployResult[0])} and would create the contract at ${wouldDeployAt}`)
     : fail(
-        `el hub responde ${errorCodeName(deployResult[0])} y crearia ${wouldDeployAt} ` +
-          '(0x0 = el constructor revirtio con los 64 bytes extra del modelo de gas)',
+        `the hub answers ${errorCodeName(deployResult[0])} and would create ${wouldDeployAt} ` +
+          '(0x0 = the constructor reverted with the extra 64 bytes of the gas model)',
       );
 
   console.log(
-    process.exitCode ? '\nself-test con fallas' : '\nself-test OK (no se envio ninguna transaccion)',
+    process.exitCode ? '\nself-test with failures' : '\nself-test OK (no transaction was sent)',
   );
 }
 

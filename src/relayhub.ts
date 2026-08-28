@@ -59,7 +59,7 @@ export async function resolveRelayHubAddress(
     return { relayHubAddress: opts.relayHubAddress, source: 'config' };
   }
   if (!opts.proxyAddress) {
-    throw new Error('Configura RELAY_HUB_ADDRESS o RELAY_HUB_PROXY_ADDRESS');
+    throw new Error('Set RELAY_HUB_ADDRESS or RELAY_HUB_PROXY_ADDRESS');
   }
   const proxy = new Contract(opts.proxyAddress, RELAY_HUB_PROXY_ABI, provider);
   const relayHubAddress: string = await proxy.getRelayHub();

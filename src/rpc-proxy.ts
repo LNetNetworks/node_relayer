@@ -67,12 +67,12 @@ export class RpcProxy {
    */
   async handle(body: unknown): Promise<JsonRpcResponse | JsonRpcResponse[] | null> {
     if (Array.isArray(body)) {
-      if (body.length === 0) return fail(null, INVALID_REQUEST, 'El batch no puede venir vacio');
+      if (body.length === 0) return fail(null, INVALID_REQUEST, 'The batch cannot be empty');
       const responses = await this.handleBatch(body as JsonRpcRequest[]);
       return responses.length > 0 ? responses : null;
     }
     if (body === null || typeof body !== 'object') {
-      return fail(null, PARSE_ERROR, 'El cuerpo tiene que ser un objeto o un array JSON-RPC');
+      return fail(null, PARSE_ERROR, 'The body must be a JSON-RPC object or array');
     }
     const req = body as JsonRpcRequest;
     const res = await this.route(req);
@@ -133,7 +133,7 @@ export class RpcProxy {
   private async route(req: JsonRpcRequest): Promise<JsonRpcResponse> {
     const { id, method } = req;
     if (typeof method !== 'string') {
-      return fail(id, INVALID_REQUEST, 'Falta el campo "method"');
+      return fail(id, INVALID_REQUEST, 'Missing the "method" field');
     }
     const params = Array.isArray(req.params) ? req.params : [];
 
@@ -153,8 +153,8 @@ export class RpcProxy {
           return fail(
             id,
             METHOD_NOT_FOUND,
-            `${method} no esta soportado: el relayer no tiene la clave del usuario. ` +
-              'Firma la metatx en el cliente y mandala con eth_sendRawTransaction.',
+            `${method} is not supported: the relayer does not hold the user key. ` +
+              'Sign the metatx on the client and send it with eth_sendRawTransaction.',
           );
         case 'eth_accounts':
         case 'eth_requestAccounts':
@@ -176,7 +176,7 @@ export class RpcProxy {
   private async sendRawTransaction(id: unknown, params: unknown[]): Promise<JsonRpcResponse> {
     const rawTx = params[0];
     if (typeof rawTx !== 'string' || !isHexString(rawTx)) {
-      return fail(id, INVALID_PARAMS, 'params[0] tiene que ser la raw tx en hex');
+      return fail(id, INVALID_PARAMS, 'params[0] must be the raw tx in hex');
     }
     // Sin esperar el receipt: el dapp lo va a polear con eth_getTransactionReceipt.
     const submitted = await this.relayer.submitRelay(rawTx);
@@ -192,7 +192,7 @@ export class RpcProxy {
   private async getTransactionCount(id: unknown, params: unknown[]): Promise<JsonRpcResponse> {
     const address = params[0];
     if (typeof address !== 'string') {
-      return fail(id, INVALID_PARAMS, 'params[0] tiene que ser una address');
+      return fail(id, INVALID_PARAMS, 'params[0] must be an address');
     }
     // "latest" -> lo minado; "pending" (o sin bloque) -> contando lo que el relayer tiene en vuelo,
     // que es el equivalente al nonce pending de una cuenta normal y lo que hay que firmar.
@@ -204,7 +204,7 @@ export class RpcProxy {
   private async getTransactionReceipt(id: unknown, params: unknown[]): Promise<JsonRpcResponse> {
     const hash = params[0];
     if (typeof hash !== 'string') {
-      return fail(id, INVALID_PARAMS, 'params[0] tiene que ser un hash');
+      return fail(id, INVALID_PARAMS, 'params[0] must be a hash');
     }
     const upstream = await this.forward({ jsonrpc: '2.0', id, method: 'eth_getTransactionReceipt', params: [hash] });
     if (upstream.error !== undefined || upstream.result == null) return upstream;
@@ -215,7 +215,7 @@ export class RpcProxy {
 
   private async forward(req: JsonRpcRequest): Promise<JsonRpcResponse> {
     const [res] = await this.postUpstream([{ ...req, jsonrpc: '2.0', id: req.id ?? 0 }]);
-    return res ?? fail(req.id, INTERNAL_ERROR, 'El nodo no devolvio respuesta');
+    return res ?? fail(req.id, INTERNAL_ERROR, 'The node returned no response');
   }
 
   private async forwardBatch(entries: { index: number; req: JsonRpcRequest }[]): Promise<[number, JsonRpcResponse][]> {
@@ -229,7 +229,7 @@ export class RpcProxy {
       if (typeof res?.id === 'number') byLocalId.set(res.id, res);
     }
     return entries.map((entry, i) => {
-      const res = byLocalId.get(i) ?? fail(entry.req.id, INTERNAL_ERROR, 'El nodo no devolvio respuesta');
+      const res = byLocalId.get(i) ?? fail(entry.req.id, INTERNAL_ERROR, 'The node returned no response');
       return [entry.index, { ...res, id: entry.req.id ?? null }];
     });
   }
@@ -244,9 +244,9 @@ export class RpcProxy {
         body: JSON.stringify(payload.length === 1 ? payload[0] : payload),
       });
     } catch (err) {
-      throw new Error(`no se pudo hablar con el nodo: ${(err as Error).message}`);
+      throw new Error(`could not reach the node: ${(err as Error).message}`);
     }
-    if (!res.ok) throw new Error(`el nodo devolvio HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`the node returned HTTP ${res.status}`);
 
     const body = await res.json();
     return Array.isArray(body) ? (body as JsonRpcResponse[]) : [body as JsonRpcResponse];

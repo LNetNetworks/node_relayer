@@ -50,14 +50,14 @@ class WsSession {
     try {
       body = JSON.parse(raw);
     } catch {
-      this.reply(fail(null, PARSE_ERROR, 'JSON invalido'));
+      this.reply(fail(null, PARSE_ERROR, 'Invalid JSON'));
       return;
     }
 
     // Un batch puede mezclar suscripciones con el resto, asi que se rutea entrada por entrada.
     if (Array.isArray(body)) {
       if (body.length === 0) {
-        this.reply(fail(null, INVALID_REQUEST, 'El batch no puede venir vacio'));
+        this.reply(fail(null, INVALID_REQUEST, 'The batch cannot be empty'));
         return;
       }
       const out = (await Promise.all(body.map((entry) => this.routeOne(entry)))).filter(
@@ -73,7 +73,7 @@ class WsSession {
 
   private async routeOne(body: unknown): Promise<JsonRpcResponse | null> {
     if (body === null || typeof body !== 'object') {
-      return fail(null, INVALID_REQUEST, 'Cada entrada tiene que ser un objeto JSON-RPC');
+      return fail(null, INVALID_REQUEST, 'Each entry must be a JSON-RPC object');
     }
     const req = body as { id?: unknown; method?: unknown; params?: unknown };
 
@@ -94,7 +94,7 @@ class WsSession {
       return fail(
         req.id,
         INVALID_PARAMS,
-        `${String(req.method)} no esta disponible: el relayer no tiene configurado el WS del nodo (WS_URL).`,
+        `${String(req.method)} is not available: the relayer has no node WS configured (WS_URL).`,
       );
     }
 
@@ -102,7 +102,7 @@ class WsSession {
     try {
       upstream = await this.connectUpstream();
     } catch (err) {
-      return fail(req.id, INTERNAL_ERROR, `no se pudo abrir el WS del nodo: ${(err as Error).message}`);
+      return fail(req.id, INTERNAL_ERROR, `could not open the node WS: ${(err as Error).message}`);
     }
 
     // Se reindexa: los ids del dapp pueden repetirse o ser strings, y hay que poder mapear la
@@ -116,7 +116,7 @@ class WsSession {
     return new Promise<JsonRpcResponse>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(localId);
-        resolve(fail(req.id, INTERNAL_ERROR, `el nodo no respondio ${String(req.method)}`));
+        resolve(fail(req.id, INTERNAL_ERROR, `the node did not answer ${String(req.method)}`));
       }, 15_000);
       this.waiters.set(localId, (res) => {
         clearTimeout(timer);
@@ -136,7 +136,7 @@ class WsSession {
       const socket = new WebSocket(this.wsUrl, { handshakeTimeout: this.connectTimeoutMs });
       const giveUp = setTimeout(() => {
         socket.terminate();
-        reject(new Error(`no respondio en ${this.connectTimeoutMs} ms`));
+        reject(new Error(`no answer within ${this.connectTimeoutMs} ms`));
       }, this.connectTimeoutMs);
 
       const onOpenError = (err: Error) => {
@@ -154,8 +154,8 @@ class WsSession {
       });
 
       socket.on('message', (data) => this.onUpstreamMessage(String(data)));
-      socket.on('close', () => this.onUpstreamGone('el WS del nodo cerro la conexion'));
-      socket.on('error', (err) => this.onUpstreamGone(`error en el WS del nodo: ${err.message}`));
+      socket.on('close', () => this.onUpstreamGone('the node WS closed the connection'));
+      socket.on('error', (err) => this.onUpstreamGone(`node WS error: ${err.message}`));
     });
 
     // Un fallo al abrir no tiene que dejar cacheada una promesa rechazada para siempre.
@@ -207,7 +207,7 @@ class WsSession {
       this.upstreamReady = null;
       return;
     }
-    console.warn(`[ws] ${this.label} ${reason}; se cierra el cliente para que reconecte`);
+    console.warn(`[ws] ${this.label} ${reason}; closing the client so it reconnects`);
     this.close();
     // 1012 = Service Restart: los clientes lo tratan como reconectable.
     try {
@@ -225,7 +225,7 @@ class WsSession {
   close(): void {
     this.closed = true;
     for (const waiter of this.waiters.values()) {
-      waiter(fail(null, INTERNAL_ERROR, 'la conexion se cerro'));
+      waiter(fail(null, INTERNAL_ERROR, 'the connection was closed'));
     }
     this.waiters.clear();
     this.pending.clear();

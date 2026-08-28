@@ -34,7 +34,7 @@ export function decodeGasModelSuffix(data: string): {
   const hexSuffixLen = GAS_MODEL_SUFFIX_BYTES * 2;
   if (body.length < hexSuffixLen) {
     throw new Error(
-      `data demasiado corto (${body.length / 2} bytes): falta el sufijo (nodeAddress, expiration) del modelo de gas`,
+      `data too short (${body.length / 2} bytes): the gas model suffix (nodeAddress, expiration) is missing`,
     );
   }
   const suffix = '0x' + body.slice(body.length - hexSuffixLen);
@@ -82,11 +82,11 @@ export function expirationFromNow(seconds: number): number {
  */
 export function validateMetaTxShape(tx: Transaction): string[] {
   const problems: string[] = [];
-  if (tx.signature == null) problems.push('la transaccion no viene firmada');
-  if (tx.type !== 0) problems.push(`type debe ser 0 (legacy), llego ${tx.type}`);
-  if (tx.chainId !== 0n) problems.push(`chainId debe ser 0, llego ${tx.chainId}`);
-  if ((tx.gasPrice ?? 0n) !== 0n) problems.push(`gasPrice debe ser 0, llego ${tx.gasPrice}`);
-  if (tx.value !== 0n) problems.push(`value debe ser 0, llego ${tx.value}`);
-  if (tx.gasLimit <= 0n) problems.push('gasLimit debe ser > 0');
+  if (tx.signature == null) problems.push('the transaction is not signed');
+  if (tx.type !== 0) problems.push(`type must be 0 (legacy), got ${tx.type}`);
+  if (tx.chainId !== 0n) problems.push(`chainId must be 0, got ${tx.chainId}`);
+  if ((tx.gasPrice ?? 0n) !== 0n) problems.push(`gasPrice must be 0, got ${tx.gasPrice}`);
+  if (tx.value !== 0n) problems.push(`value must be 0, got ${tx.value}`);
+  if (tx.gasLimit <= 0n) problems.push('gasLimit must be > 0');
   return problems;
 }
