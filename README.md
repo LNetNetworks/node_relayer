@@ -500,6 +500,48 @@ puede salir con un nonce repetido. Se cura solo en el bloque siguiente.
   on-chain: `executed: false` con el nonce igual avanzando). Es lo que permite encadenar metatx
   sin que un revert tumbe toda la rafaga.
 
+## Autenticacion
+
+`RELAY_API_SECRET` protege los tres caminos que gastan gas del writer node: `POST /relay`, el
+JSON-RPC (`POST /`) y el WebSocket. `/info` y `/nonce/:address` quedan abiertos a proposito: el
+cliente los necesita para armar la metatx.
+
+```sh
+curl -H "Authorization: Bearer $RELAY_API_SECRET" -X POST http://localhost:3000/relay \
+  -H 'Content-Type: application/json' -d '{"rawTx":"0x..."}'
+```
+
+El WebSocket lo lleva en la query (`wss://host/?token=<secreto>`) porque el WebSocket del browser
+no permite mandar cabeceras en el handshake. Sin la variable definida no se exige nada, que es lo
+razonable en localhost.
+
+## Despliegue en Vercel
+
+`api/index.ts` exporta el `http.Server` (el patron que Vercel documenta para `ws` sobre Fluid
+Compute), y `vercel.json` rutea todo el trafico ahi. Las rutas viven en `src/app.ts`, compartidas
+con el arranque local.
+
+```sh
+vercel link --scope <equipo> --project node-relayer
+vercel env add NODE_PRIVATE_KEY production      # y el resto de .env.example
+vercel deploy                                   # --prod para produccion
+```
+
+> **Advertencia: el modelo serverless choca con el diseno de este relayer.**
+> El tracker de nonces vive en memoria del proceso y asume una instancia unica (ver
+> [Supuesto: una sola instancia](#supuesto-una-sola-instancia)). Fluid Compute agrupa
+> invocaciones concurrentes en una instancia pero escala a varias bajo carga, y no hay garantia de
+> instancia unica. Dos instancias con la misma clave de writer node se pisan el nonce y traban el
+> txpool. Ademas el WebSocket se corta al llegar al `maxDuration` (300 s), asi que el cliente tiene
+> que resuscribir sus `eth_subscribe`.
+>
+> Para produccion seria, el tracker tiene que salir del proceso (Redis) o el servicio tiene que
+> correr como proceso persistente de instancia unica.
+
+Si el nodo Besu filtra por IP de origen, hay que contemplar que la IP de egreso de las funciones
+de Vercel es dinamica.
+
+
 ## Licencia
 
 Apache License 2.0 -- ver [LICENSE](LICENSE).

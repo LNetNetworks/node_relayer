@@ -13,6 +13,7 @@
  */
 import { IncomingMessage, Server } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
+import { timingSafeEqual } from 'crypto';
 import type { Config } from './config';
 import { JsonRpcResponse, RpcProxy } from './rpc-proxy';
 
@@ -39,7 +40,7 @@ class WsSession {
 
   constructor(
     private readonly client: WebSocket,
-    private readonly proxy: RpcProxy,
+    private readonly getProxy: () => Promise<RpcProxy>,
     private readonly wsUrl: string,
     private readonly connectTimeoutMs: number,
     private readonly label: string,
@@ -84,7 +85,7 @@ class WsSession {
     }
 
     // Todo lo demas es identico a HTTP: se reusa el mismo dispatcher ya probado.
-    const res = await this.proxy.handle(req);
+    const res = await (await this.getProxy()).handle(req);
     return Array.isArray(res) ? (res[0] ?? null) : res;
   }
 
@@ -243,14 +244,31 @@ class WsSession {
 }
 
 /** Monta el endpoint WebSocket sobre el mismo servidor HTTP del relayer. */
-export function attachWsProxy(server: Server, proxy: RpcProxy, cfg: Config): { wsUrl: string } {
+/** El proxy puede venir como getter perezoso: en serverless todavia no existe al montar el WS. */
+export function attachWsProxy(
+  server: Server,
+  proxy: RpcProxy | (() => Promise<RpcProxy>),
+  cfg: Config,
+): { wsUrl: string } {
+  const getProxy = typeof proxy === 'function' ? proxy : async () => proxy;
   const wsUrl = cfg.wsUrl;
-  const wss = new WebSocketServer({ server });
+  // Por el WS tambien entran escrituras (eth_sendRawTransaction), asi que lleva el mismo secreto
+  // que el HTTP. Va por query param porque el WebSocket del browser no manda cabeceras.
+  const wss = new WebSocketServer({
+    server,
+    verifyClient: ({ req }: { req: IncomingMessage }) => {
+      if (cfg.apiSecret === '') return true;
+      const token = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token') ?? '';
+      const ok = token.length === cfg.apiSecret.length && timingSafeEqual(Buffer.from(token), Buffer.from(cfg.apiSecret));
+      if (!ok) console.warn('[ws] handshake rechazado: token invalido');
+      return ok;
+    },
+  });
   let seq = 0;
 
   wss.on('connection', (client: WebSocket, req: IncomingMessage) => {
     const label = `#${++seq} ${req.socket.remoteAddress ?? '?'}`;
-    const session = new WsSession(client, proxy, wsUrl, cfg.wsConnectTimeoutMs, label);
+    const session = new WsSession(client, getProxy, wsUrl, cfg.wsConnectTimeoutMs, label);
     console.log(`[ws] ${label} conectado`);
 
     client.on('message', (data) => {
