@@ -2,6 +2,7 @@
   "name": "simple-relay",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Relayer minimo del modelo de gas LAC-NET / lnet: recibe una metatx firmada y la ejecuta contra el RelayHub (TxRelay)",
   "scripts": {
     "dev": "tsx watch src/server.ts",

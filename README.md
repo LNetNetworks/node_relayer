@@ -64,6 +64,8 @@ COMPARACION-GO-NODE.md     comparacion detallada con el relay-signer en Go
 ## Uso
 
 ```sh
+git clone git@github.com:LNetNetworks/node_relayer.git
+cd node_relayer
 npm install
 cp .env.example .env    # completar RPC_URL y NODE_PRIVATE_KEY
 npm run selftest        # opcional: valida el armado de la metatx contra el hub real
@@ -497,3 +499,21 @@ puede salir con un nonce repetido. Se cura solo en el bloque siguiente.
 - El hub **incrementa el nonce del usuario aunque el contrato destino revierta** (verificado
   on-chain: `executed: false` con el nonce igual avanzando). Es lo que permite encadenar metatx
   sin que un revert tumbe toda la rafaga.
+
+## Licencia
+
+Apache License 2.0 -- ver [LICENSE](LICENSE).
+
+```
+Copyright 2026 LNet Networks
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+```
