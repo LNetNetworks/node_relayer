@@ -2,10 +2,34 @@ import 'dotenv/config';
 import { getAddress } from 'ethers';
 import { DEFAULT_EXPIRATION_TOLERANCE_SECONDS, DEFAULT_MIN_EXPIRATION_SECONDS } from './gas-model';
 
-function required(name: string): string {
-  const v = process.env[name];
-  if (!v || v.trim() === '') throw new Error(`Falta la variable de entorno ${name} (ver .env.example)`);
-  return v.trim();
+/**
+ * Variables sin las que el relayer no puede arrancar.
+ *
+ * A proposito NO se valida al importar el modulo: en serverless un throw en el scope del modulo
+ * mata el proceso antes de que exista un handler, y lo unico que ve quien llama es un
+ * FUNCTION_INVOCATION_FAILED sin causa. Se valida en `assertConfigComplete()`, ya dentro de la
+ * request (o del arranque, en local), donde el error se puede devolver explicado.
+ */
+const REQUIRED_VARS = ['RPC_URL', 'NODE_PRIVATE_KEY'] as const;
+
+function env(name: string): string {
+  return process.env[name]?.trim() ?? '';
+}
+
+/** Devuelve las variables obligatorias que faltan, en orden. */
+export function missingConfig(): string[] {
+  return REQUIRED_VARS.filter((name) => env(name) === '');
+}
+
+/** Lanza con el detalle de que falta. Se llama al crear el Relayer, no al importar. */
+export function assertConfigComplete(): void {
+  const missing = missingConfig();
+  if (missing.length > 0) {
+    throw new Error(
+      `Falta${missing.length > 1 ? 'n' : ''} la${missing.length > 1 ? 's' : ''} variable${missing.length > 1 ? 's' : ''} ` +
+        `de entorno ${missing.join(', ')} (ver .env.example)`,
+    );
+  }
 }
 
 /**
@@ -37,10 +61,10 @@ export const config = {
    * El endpoint publico de un nodo lnet suele ser el relay-signer oficial, que intercepta
    * eth_sendRawTransaction esperando una metatx y rechazaria las tx de este relayer.
    */
-  rpcUrl: required('RPC_URL'),
+  rpcUrl: env('RPC_URL'),
 
   /** Clave del writer node que paga/relaya (tiene que estar dada de alta con addNode en el hub). */
-  nodePrivateKey: required('NODE_PRIVATE_KEY'),
+  nodePrivateKey: env('NODE_PRIVATE_KEY'),
 
   /** Si no se define, se resuelve preguntandole al proxy con getRelayHub(). */
   relayHubAddress: optionalAddress('RELAY_HUB_ADDRESS'),

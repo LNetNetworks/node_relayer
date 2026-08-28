@@ -13,7 +13,7 @@
 import express, { NextFunction, Request, Response } from 'express';
 import { timingSafeEqual } from 'crypto';
 import { getAddress, isHexString } from 'ethers';
-import { Config, config as defaultConfig } from './config';
+import { Config, assertConfigComplete, config as defaultConfig } from './config';
 import { RelayError, Relayer } from './relayer';
 import { RpcProxy } from './rpc-proxy';
 
@@ -36,7 +36,11 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
 
   const ready = (): Promise<{ relayer: Relayer; proxy: RpcProxy }> => {
     if (pending === null) {
-      pending = Relayer.create(cfg)
+      // Dentro de la request: si falta una variable, sale un 500 con el nombre de la que falta
+      // en vez de un FUNCTION_INVOCATION_FAILED sin causa.
+      pending = Promise.resolve()
+        .then(() => assertConfigComplete())
+        .then(() => Relayer.create(cfg))
         .then((relayer) => ({ relayer, proxy: new RpcProxy(relayer, cfg.rpcUrl) }))
         .catch((err) => {
           // Sin esto un fallo transitorio del nodo deja la instancia rota para siempre.

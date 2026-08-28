@@ -15,11 +15,14 @@
  *    Ver src/rpc-proxy.ts y src/ws-proxy.ts para el ruteo metodo por metodo.
  */
 import { createServer } from 'http';
-import { config } from './config';
+import { assertConfigComplete, config } from './config';
 import { createRelayApp } from './app';
 import { attachWsProxy } from './ws-proxy';
 
 async function main() {
+  // En local conviene el fallo temprano y claro, antes de abrir el puerto.
+  assertConfigComplete();
+
   const { app, ready } = createRelayApp(config);
 
   // Local conviene fallar en el arranque y no en la primera request.
