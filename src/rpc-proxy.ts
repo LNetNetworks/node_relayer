@@ -19,6 +19,7 @@
  */
 import { getAddress, isHexString } from 'ethers';
 import { RelayError, Relayer } from './relayer';
+import { errorFields, log } from './log';
 
 export interface JsonRpcRequest {
   jsonrpc?: string;
@@ -46,7 +47,12 @@ function ok(id: unknown, result: unknown): JsonRpcResponse {
   return { jsonrpc: '2.0', id: id ?? null, result };
 }
 
+/**
+ * Embudo unico de toda respuesta de error JSON-RPC, y por eso el lugar donde se loggea: un
+ * `return fail(...)` desde cualquier rama queda registrado sin tener que instrumentar cada una.
+ */
 function fail(id: unknown, code: number, message: string, data?: unknown): JsonRpcResponse {
+  log.warn('rpc.error_response', { id: id ?? null, code, message, ...(data === undefined ? {} : { data }) });
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message, ...(data === undefined ? {} : { data }) } };
 }
 
@@ -133,9 +139,18 @@ export class RpcProxy {
   private async route(req: JsonRpcRequest): Promise<JsonRpcResponse> {
     const { id, method } = req;
     if (typeof method !== 'string') {
+      log.warn('rpc.bad_request', { id, reason: 'missing "method"' });
       return fail(id, INVALID_REQUEST, 'Missing the "method" field');
     }
     const params = Array.isArray(req.params) ? req.params : [];
+    const startedAt = Date.now();
+    log.info('rpc.call', {
+      method,
+      id: id ?? null,
+      relayed: method === 'eth_sendRawTransaction',
+      notification: isNotification(req),
+      paramCount: params.length,
+    });
 
     try {
       switch (method) {
@@ -165,8 +180,10 @@ export class RpcProxy {
       }
     } catch (err) {
       if (err instanceof RelayError) {
+        log.warn('rpc.rejected', { method, id: id ?? null, ms: Date.now() - startedAt, ...errorFields(err) });
         return fail(id, SERVER_ERROR, `${err.code}: ${err.message}`, err.details ?? undefined);
       }
+      log.error('rpc.failed', { method, id: id ?? null, ms: Date.now() - startedAt, ...errorFields(err) });
       return fail(id, INTERNAL_ERROR, (err as Error).message);
     }
   }
@@ -179,11 +196,9 @@ export class RpcProxy {
       return fail(id, INVALID_PARAMS, 'params[0] must be the raw tx in hex');
     }
     // Sin esperar el receipt: el dapp lo va a polear con eth_getTransactionReceipt.
+    // Sin await de `settled`: el resultado final de esta metatx solo va a quedar registrado en
+    // el log (relay.settled), porque este camino le devuelve el hash al dapp y corta.
     const submitted = await this.relayer.submitRelay(rawTx);
-    console.log(
-      `[rpc] relay enviada ${submitted.transactionHash} from=${submitted.from} ` +
-        `to=${submitted.to ?? '(deploy)'} nonce=${submitted.nonce}`,
-    );
     return ok(id, submitted.transactionHash);
   }
 
@@ -244,6 +259,7 @@ export class RpcProxy {
         body: JSON.stringify(payload.length === 1 ? payload[0] : payload),
       });
     } catch (err) {
+      log.warn('upstream.unreachable', errorFields(err));
       throw new Error(`could not reach the node: ${(err as Error).message}`);
     }
     if (!res.ok) throw new Error(`the node returned HTTP ${res.status}`);

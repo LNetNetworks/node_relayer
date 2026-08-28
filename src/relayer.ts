@@ -4,7 +4,7 @@
  * Recibe la metatx del usuario ya firmada (raw tx hex), la valida y la ejecuta llamando
  * a RelayHub.relayMetaTx(gasLimit, signingData, v, r, s) con la clave del writer node.
  */
-import { Contract, LogDescription, Transaction, TransactionReceipt, Wallet, getAddress } from 'ethers';
+import { Contract, LogDescription, Transaction, TransactionReceipt, Wallet, getAddress, keccak256 } from 'ethers';
 import { AccountRules } from './account-rules';
 import { Config, config as defaultConfig } from './config';
 import { LnetProvider } from './provider';
@@ -19,6 +19,7 @@ import {
   relayHubContract,
   resolveRelayHubAddress,
 } from './relayhub';
+import { errorFields, log, shouldLogRawTx } from './log';
 
 /** Saca el mensaje util de un error de ethers/JSON-RPC, sin el volcado del payload. */
 function upstreamMessage(err: any): string {
@@ -35,6 +36,21 @@ function upstreamMessage(err: any): string {
  * `tx.wait()` con techo de tiempo. Si vence, el nonce del writer node quedo consumido por una tx
  * que nunca se mino: hay que mirar el txpool del nodo, no reintentar a ciegas.
  */
+/** Hash de la raw tx tal como llego. Si no es hex valido no rompe el log: devuelve null. */
+function rawTxHash(rawTx: string): string | null {
+  try {
+    return keccak256(rawTx);
+  } catch {
+    return null;
+  }
+}
+
+/** Acota un hex largo para que la linea de log no la recorte Vercel. */
+function clip(hex: string | null, max = 258): string | null {
+  if (hex === null) return null;
+  return hex.length <= max ? hex : `${hex.slice(0, max)}...(${(hex.length - 2) / 2} bytes)`;
+}
+
 async function waitWithTimeout(
   sent: { hash: string; wait: () => Promise<TransactionReceipt | null> },
   timeoutMs: number,
@@ -264,7 +280,7 @@ export class Relayer {
           `ENFORCE_ACCOUNT_RULES=true but AccountRules could not be resolved: ${upstreamMessage(err)}`,
         );
       }
-      console.warn(`[permissioning] could not resolve AccountRules: ${upstreamMessage(err)}`);
+      log.warn('permissioning.resolve_failed', { error: upstreamMessage(err) });
       return null;
     }
     if (rules === null && cfg.enforceAccountRules) {
@@ -314,23 +330,26 @@ export class Relayer {
    */
   private async checkNodePermissioning(): Promise<void> {
     if (this.accountRules === null) {
-      console.warn('[permissioning] the chain does not expose AccountRules: the writer node is not checked');
+      log.warn('permissioning.unavailable', { reason: 'the chain does not expose AccountRules' });
       return;
     }
     try {
       this.nodePermitted = await this.accountRules.permitted(this.nodeAddress);
     } catch (err) {
-      console.warn(
-        `[permissioning] could not read AccountRules (${this.accountRules.address}): ${upstreamMessage(err)}`,
-      );
+      log.warn('permissioning.read_failed', {
+        accountRules: this.accountRules.address,
+        error: upstreamMessage(err),
+      });
       return;
     }
     if (!this.nodePermitted) {
-      console.warn(
-        `[permissioning] ${this.nodeAddress} is NOT in AccountRules (${this.accountRules.address}): ` +
+      log.warn('permissioning.node_not_permitted', {
+        nodeAddress: this.nodeAddress,
+        accountRules: this.accountRules.address,
+        note:
           'if the node enforces account permissioning it will reject every relayMetaTx with ' +
           '"not authorized". It must be registered (addAccount) on top of addNode on the hub.',
-      );
+      });
     }
   }
 
@@ -479,7 +498,19 @@ export class Relayer {
    * `settled` resuelve cuando la metatx se mina; el caller puede ignorarlo.
    */
   async submitRelay(rawTx: string): Promise<SubmittedRelay> {
-    return this.doRelay(rawTx);
+    const startedAt = Date.now();
+    log.info('relay.received', {
+      rawTxBytes: Math.max(0, (rawTx.length - 2) / 2),
+      rawTxHash: rawTxHash(rawTx),
+      ...(shouldLogRawTx() ? { rawTx } : {}),
+    });
+    try {
+      return await this.doRelay(rawTx);
+    } catch (err) {
+      // Un rechazo es informacion de operacion, no un fallo del servicio: va como warn.
+      log.warn('relay.rejected', { ms: Date.now() - startedAt, ...errorFields(err) });
+      throw err;
+    }
   }
 
   private async doRelay(rawTx: string): Promise<SubmittedRelay> {
@@ -495,7 +526,22 @@ export class Relayer {
       throw new RelayError(`The metatx does not match the gas model: ${problems.join('; ')}`, 'BAD_META_TX', problems);
     }
     const from = tx.from!;
-    const { nodeAddress, expiration } = decodeGasModelSuffix(tx.data);
+    const { innerData, nodeAddress, expiration } = decodeGasModelSuffix(tx.data);
+
+    log.info('relay.decoded', {
+      from,
+      to: tx.to,
+      isDeploy: tx.to == null,
+      nonce: tx.nonce,
+      userGasLimit: tx.gasLimit,
+      metaTxGasLimit: metaTxGasLimit(tx.data, tx.gasLimit),
+      nodeAddress,
+      expiration,
+      expiresInSeconds: Number(expiration) - Math.floor(Date.now() / 1000),
+      dataBytes: Math.max(0, (tx.data.length - 2) / 2),
+      selector: innerData.length >= 10 ? innerData.slice(0, 10) : null,
+      innerData: clip(innerData),
+    });
 
     if (this.cfg.enforceNodeAddress && nodeAddress !== this.nodeAddress) {
       throw new RelayError(
@@ -564,8 +610,30 @@ export class Relayer {
       simulatedAddress,
       simulatedCode,
     });
-    // El caller de submitRelay puede no esperar `settled` (el camino JSON-RPC no lo hace):
-    // sin este catch, un fallo del receipt seria una unhandled rejection que tumba el proceso.
+    // El camino JSON-RPC no espera `settled`, asi que el resultado final solo existe en el log:
+    // estos handlers son la unica forma de ver como termino una metatx mandada por ahi.
+    const settleStartedAt = Date.now();
+    settled.then(
+      (result) =>
+        log.info('relay.settled', {
+          ms: Date.now() - settleStartedAt,
+          transactionHash: result.transactionHash,
+          blockNumber: result.blockNumber,
+          gasUsed: result.gasUsed,
+          executed: result.executed,
+          errorCode: result.errorCode,
+          errorCodeName: result.errorCodeName,
+          simulated: result.simulated,
+          events: result.events,
+          deployedAddress: result.deployedAddress,
+          from: result.from,
+          to: result.to,
+          nonce: result.nonce,
+          output: clip(result.output),
+        }),
+      (err) => log.error('relay.settle_failed', { ms: Date.now() - settleStartedAt, ...errorFields(err) }),
+    );
+    // Sin este catch, un fallo del receipt seria una unhandled rejection que tumba el proceso.
     settled.catch(() => undefined);
 
     return { transactionHash: sent.hash, from, to: tx.to, nonce: tx.nonce, isDeploy, settled };
@@ -573,7 +641,7 @@ export class Relayer {
 
   /** Espera el receipt, libera la reserva del nonce y decodifica los eventos del hub. */
   private async settle(ctx: {
-    sent: { hash: string; wait: () => Promise<TransactionReceipt | null> };
+    sent: { hash: string; nonce: number; wait: () => Promise<TransactionReceipt | null> };
     from: string;
     chain: InflightChain;
     tx: Transaction;
@@ -615,10 +683,13 @@ export class Relayer {
       // (Un revert del contrato destino no entra aca: eso es TransactionRelayed con
       // executed=false, y ahi el nonce si avanza y la cadena sigue sana.)
       this.forgetInflight(from);
-      console.warn(
-        `[relay] the hub rejected ${receipt.hash} (${errorCodeName(errorCode)}) for ${from}: ` +
-          'reserved nonces are dropped, any chained metatx after this one will fail',
-      );
+      log.warn('relay.hub_rejected', {
+        transactionHash: receipt.hash,
+        from,
+        errorCode,
+        errorCodeName: errorCodeName(errorCode),
+        note: 'reserved nonces are dropped, any chained metatx after this one will fail',
+      });
     }
 
     return {
@@ -664,7 +735,7 @@ export class Relayer {
     gasLimit: bigint;
     overrides: { gasLimit: bigint; gasPrice: bigint };
   }): Promise<{
-    sent: { hash: string; wait: () => Promise<TransactionReceipt | null> };
+    sent: { hash: string; nonce: number; wait: () => Promise<TransactionReceipt | null> };
     errorCode: number | null;
     simulatedAddress: string | null;
     simulated: boolean;
@@ -750,6 +821,20 @@ export class Relayer {
       chain.next = expectedNonce + 1n;
       chain.pending += 1;
     }
+    log.info('relay.sent', {
+      method,
+      from,
+      transactionHash: sent.hash,
+      // El nonce de la CUENTA del writer node, no el del hub: es el que traba el txpool si algo
+      // se pierde, y el unico dato con el que se puede desatascar la cola desde el nodo.
+      writerNodeNonce: sent.nonce,
+      hubNonce: expectedNonce,
+      metaTxGasLimit: gasLimit,
+      simulated: canSimulate,
+      simulatedErrorCode: errorCode,
+      simulatedErrorCodeName: errorCode === null ? null : errorCodeName(errorCode),
+      pendingForUser: chain.pending,
+    });
     this.notifyTurn(from); // avanzo el nonce: le toca a la siguiente de la rafaga
     return { sent, errorCode, simulatedAddress, simulated: canSimulate, chain };
   }

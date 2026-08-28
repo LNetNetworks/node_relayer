@@ -15,13 +15,16 @@ import { IncomingMessage, Server } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import type { Config } from './config';
 import { JsonRpcResponse, RpcProxy } from './rpc-proxy';
+import { errorFields, log, newRequestId, withLogContext } from './log';
 
 const INVALID_REQUEST = -32600;
 const INVALID_PARAMS = -32602;
 const INTERNAL_ERROR = -32603;
 const PARSE_ERROR = -32700;
 
+/** Igual que en el proxy HTTP: embudo unico de errores, y por eso el punto de log. */
 function fail(id: unknown, code: number, message: string): JsonRpcResponse {
+  log.warn('ws.error_response', { id: id ?? null, code, message });
   return { jsonrpc: '2.0', id: id ?? null, error: { code, message } };
 }
 
@@ -207,7 +210,7 @@ class WsSession {
       this.upstreamReady = null;
       return;
     }
-    console.warn(`[ws] ${this.label} ${reason}; closing the client so it reconnects`);
+    log.warn('ws.upstream_gone', { ws: this.label, reason, note: 'closing the client so it reconnects' });
     this.close();
     // 1012 = Service Restart: los clientes lo tratan como reconectable.
     try {
@@ -256,19 +259,33 @@ export function attachWsProxy(
 
   wss.on('connection', (client: WebSocket, req: IncomingMessage) => {
     const label = `#${++seq} ${req.socket.remoteAddress ?? '?'}`;
-    const session = new WsSession(client, getProxy, wsUrl, cfg.wsConnectTimeoutMs, label);
-    console.log(`[ws] ${label} conectado`);
+    // Un contexto por conexion: todo lo que emita esta sesion --incluidas las metatx que entren
+    // por aca-- queda correlacionado con el mismo `reqId`.
+    withLogContext({ reqId: newRequestId(), ws: label }, () => {
+      const session = new WsSession(client, getProxy, wsUrl, cfg.wsConnectTimeoutMs, label);
+      const openedAt = Date.now();
+      log.info('ws.connected', {
+        ip: (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim() ?? req.socket.remoteAddress ?? null,
+        userAgent: req.headers['user-agent'] ?? null,
+        upstream: wsUrl || null,
+      });
 
-    client.on('message', (data) => {
-      session.onMessage(String(data)).catch((err) => {
-        console.error(`[ws] ${label} error procesando mensaje`, err);
+      client.on('message', (data) => {
+        const text = String(data);
+        log.debug('ws.message', { bytes: text.length });
+        session.onMessage(text).catch((err) => {
+          log.error('ws.message_failed', errorFields(err));
+        });
+      });
+      client.on('close', (code: number, reason: Buffer) => {
+        session.close();
+        log.info('ws.closed', { code, reason: reason.toString() || null, ms: Date.now() - openedAt });
+      });
+      client.on('error', (err: Error) => {
+        log.warn('ws.client_error', errorFields(err));
+        session.close();
       });
     });
-    client.on('close', () => {
-      session.close();
-      console.log(`[ws] ${label} desconectado`);
-    });
-    client.on('error', () => session.close());
   });
 
   return { wsUrl };

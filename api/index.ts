@@ -13,6 +13,11 @@ import { createServer } from 'http';
 import { config } from '../src/config';
 import { createRelayApp } from '../src/app';
 import { attachWsProxy } from '../src/ws-proxy';
+import { log } from '../src/log';
+
+// Marca de cold start: en el log de Vercel es la unica forma de distinguir una instancia nueva
+// (con el tracker de nonces vacio) de una reutilizada.
+log.info('boot', { runtime: process.version, region: process.env.VERCEL_REGION ?? null, env: process.env.VERCEL_ENV ?? null });
 
 const { app, ready } = createRelayApp(config);
 const server = createServer(app);

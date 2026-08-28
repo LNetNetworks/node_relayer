@@ -501,6 +501,57 @@ puede salir con un nonce repetido. Se cura solo en el bloque siguiente.
   sin que un revert tumbe toda la rafaga.
 
 
+## Logs
+
+Una linea JSON por evento, a stdout (`debug`/`info`) y stderr (`warn`/`error`). El formato no es
+estetico, es funcional: Vercel indexa la salida como texto, asi que un objeto plano se filtra por
+campo, y un log multilinea se partiria en entradas separadas.
+
+Todos los eventos de una misma request comparten `reqId`, que tambien vuelve en la cabecera
+`x-request-id` de la respuesta. Asi se sigue una metatx de punta a punta, incluso las que entran
+por JSON-RPC y cuyo resultado final llega **despues** de haberle respondido al dapp.
+
+### Eventos
+
+| evento | nivel | cuando |
+| --- | --- | --- |
+| `boot` | info | cold start de la instancia (runtime, region, entorno) |
+| `relayer.ready` | info | relayer inicializado: chainId, writer node, hub, permissioning |
+| `relayer.init_failed` | error | no se pudo inicializar (nodo caido, config incompleta) |
+| `http.request` / `http.response` | info | metodo, path, ip, user-agent, `x-vercel-id`, status, ms |
+| `http.bad_body` | warn | el body no es JSON valido |
+| `relay.received` | info | llego una raw tx: `rawTxBytes`, `rawTxHash` |
+| `relay.decoded` | info | metatx decodificada: from, to, nonce, gasLimits, nodeAddress, expiration, selector |
+| `relay.sent` | info | enviada a la cadena: txHash, **`writerNodeNonce`**, `hubNonce`, resultado de la simulacion |
+| `relay.settled` | info | resultado final: bloque, gasUsed, `executed`, `errorCode`, eventos del hub, `output` |
+| `relay.rejected` | warn | rechazada antes de enviarse, con el `code` de `RelayError` |
+| `relay.settle_failed` | error | se envio pero no se pudo resolver (`RECEIPT_TIMEOUT`, `NO_RECEIPT`) |
+| `relay.hub_rejected` | warn | el hub la rechazo on-chain: los nonces reservados se descartan |
+| `rpc.call` / `rpc.error_response` | info / warn | cada llamada JSON-RPC y cada error que se devuelve |
+| `ws.connected` / `ws.closed` | info | ciclo de vida de cada conexion WebSocket |
+| `permissioning.*` | warn | el writer node no esta en AccountRules, o no se pudo leer |
+
+`writerNodeNonce` es el dato que hay que mirar cuando la cola se traba: es el nonce de la **cuenta**
+del writer node, el unico con el que se puede destrabar el txpool desde el nodo.
+
+Se configura con `LOG_LEVEL` y `LOG_RAW_TX` (ver `.env.example`).
+
+### Verlos en Vercel
+
+```sh
+vercel logs <deployment-url> --follow              # en vivo
+vercel logs <deployment-url> --level error --level warn
+vercel logs <deployment-url> --query relay.settled # buscar un evento
+vercel logs <deployment-url> --query <reqId>       # una metatx de punta a punta
+```
+
+Tambien estan en el dashboard, en Deployments -> la funcion -> Runtime Logs.
+
+> Los runtime logs de Vercel **no son almacenamiento durable**: sirven para observar e investigar,
+> no como registro historico. Si hace falta conservar el log de las metatx relayadas (auditoria,
+> reconciliacion), hay que mandarlo a un destino externo con un
+> [Log Drain](https://vercel.com/docs/log-drains), o escribir el resultado a una base ademas del log.
+
 ## Despliegue en Vercel
 
 `api/index.ts` exporta el `http.Server` (el patron que Vercel documenta para `ws` sobre Fluid
