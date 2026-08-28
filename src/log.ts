@@ -34,6 +34,14 @@ function logRawTx(): boolean {
   return (process.env.LOG_RAW_TX ?? 'false') === 'true';
 }
 
+/**
+ * Id de esta instancia del proceso. Va en cada linea a proposito: es la unica forma de ver,
+ * leyendo el log, si dos instancias estuvieron sirviendo a la vez. Importa porque el tracker de
+ * nonces vive en memoria y asume una sola (ver "Supuesto: una sola instancia" en el README):
+ * dos `instanceId` distintos relayando para el mismo `from` es el escenario que rompe la cadena.
+ */
+const INSTANCE_ID = randomBytes(4).toString('hex');
+
 interface LogContext {
   reqId: string;
   [key: string]: unknown;
@@ -80,6 +88,7 @@ function emit(level: LogLevel, event: string, fields: Record<string, unknown>): 
     ts: new Date().toISOString(),
     level,
     event,
+    instanceId: INSTANCE_ID,
     ...(ctx ?? {}),
     ...fields,
   };

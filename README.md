@@ -507,8 +507,12 @@ Una linea JSON por evento, a stdout (`debug`/`info`) y stderr (`warn`/`error`). 
 estetico, es funcional: Vercel indexa la salida como texto, asi que un objeto plano se filtra por
 campo, y un log multilinea se partiria en entradas separadas.
 
-Todos los eventos de una misma request comparten `reqId`, que tambien vuelve en la cabecera
-`x-request-id` de la respuesta. Asi se sigue una metatx de punta a punta, incluso las que entran
+Cada linea lleva `instanceId` (el proceso que la emitio) y `reqId` (la request), y el `reqId`
+vuelve tambien en la cabecera `x-request-id` de la respuesta.
+
+`instanceId` no es decorativo en Vercel: dos `instanceId` distintos relayando para el mismo `from`
+es exactamente el escenario que rompe el tracker de nonces (ver
+[Supuesto: una sola instancia](#supuesto-una-sola-instancia)). El log es la forma de detectarlo. Asi se sigue una metatx de punta a punta, incluso las que entran
 por JSON-RPC y cuyo resultado final llega **despues** de haberle respondido al dapp.
 
 ### Eventos
