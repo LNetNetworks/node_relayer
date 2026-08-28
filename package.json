@@ -1,0 +1,30 @@
+{
+  "name": "simple-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relayer minimo del modelo de gas LAC-NET / lnet: recibe una metatx firmada y la ejecuta contra el RelayHub (TxRelay)",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "serve": "node dist/server.js",
+    "client": "tsx src/client.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "selftest": "tsx src/selftest.ts",
+    "test:deploy": "tsx src/deploy-storage.ts",
+    "test:nonces": "tsx examples/nonce-stress.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ethers": "^6.16.0",
+    "express": "^4.21.2",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

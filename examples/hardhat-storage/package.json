@@ -1,0 +1,21 @@
+{
+  "name": "hardhat-storage-metatx",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deploy de Storage con Hardhat a traves del relayer, usando el modelo de gas de LAC-NET",
+  "scripts": {
+    "compile": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.ts --network lacchain"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.0.8",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.16.0",
+    "hardhat": "^2.22.17",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@lacchain/gas-model-provider": "^1.2.1"
+  }
+}
