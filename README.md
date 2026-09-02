@@ -373,27 +373,30 @@ Detalles:
 
 ## Go vs Node: este relayer y el relay-signer oficial
 
-El relay-signer oficial de LACChain esta en Go (`naas-gas-management`) y es un servicio de
-produccion; este es una implementacion propia, minima, del mismo protocolo. Lo esencial:
+El relay-signer oficial de LACChain esta en Go: el clasico es `gas-management` (una clave por
+writer node) y `naas-gas-management` es su fork multi-tenant, que ya porto el manejo de nonces del
+clasico. Este es una implementacion propia, minima, del mismo protocolo. Lo esencial:
 
 | | Go (`gas-relay-signer`) | Node (`simple_relay`) |
 |---|---|---|
-| metatx por usuario por bloque | 1 (la segunda da `BAD NONCE`) | varias (medido: 6 en 2-3 bloques) |
+| metatx por usuario por bloque | 1 (la segunda la rechaza el hub con `BadNonce`, con la tx ya gastada) | varias (medido: 6 en 2-3 bloques) |
 | lecturas (`eth_call`, `eth_getLogs`, ...) | `method is not supported`: van a otro endpoint | passthrough crudo, un solo endpoint para el dapp |
 | batches JSON-RPC | se reenvian sin inspeccionar | se parten y se rutean uno por uno |
 | `eth_subscribe` / WebSocket | no | si, un upstream por cliente |
 | pre-chequeo del hub | manda y se ve en el receipt | `eth_call` antes de gastar un bloque |
 | receipt reescrito | `contractAddress` y `status: 0` con `revertReason` | lo mismo, mas `BadTransactionSent` -> `status: 0` |
 | claves del writer node / auth | N claves en Postgres, resueltas por JWT | una sola clave en `.env`, sin auth |
-| permissioning del sender (`AccountRules`) | siempre | opcional (`ENFORCE_ACCOUNT_RULES`), y chequea al writer node al arrancar |
-| cupo de gas por bloque del node | lo lleva contado | lo deja al hub (la simulacion previa lo atrapa) |
+| permissioning del sender (`AccountRules`) | opcional (`permissionsEnabled`), con la direccion fija en `config.toml` | opcional (`ENFORCE_ACCOUNT_RULES`), resuelto por `AccountIngress`, y chequea al writer node al arrancar |
+| cupo de gas por bloque del node | lo lleva contado (WS a los bloques nuevos) | lo deja al hub (solo lo atrapa la simulacion, y solo en la primera de cada rafaga) |
+| resultado de la metatx | `relay_getMetaTxResult` | no existe: por JSON-RPC queda solo en el log |
 | transacciones privadas (`priv_*`) | si | no |
 
 Los dos primeros puntos son la razon practica de que exista este relayer; los tres ultimos son
 lo que habria que sumarle para reemplazar al oficial en un despliegue multi-tenant.
 
-El detalle largo -- por que la cola de nonces de Go no llega a encadenar, con las referencias al
-codigo -- esta en [`COMPARACION-GO-NODE.md`](./COMPARACION-GO-NODE.md).
+El detalle largo -- por que el de Go no llega a encadenar metatx, que valida cada uno y los riesgos
+abiertos de este, con las referencias al codigo -- esta en
+[`COMPARACION-GO-NODE.md`](./COMPARACION-GO-NODE.md).
 
 ## Nonces y concurrencia
 
