@@ -13,6 +13,7 @@ import { getAddress, isHexString } from 'ethers';
 import { Config, assertConfigComplete, config as defaultConfig } from './config';
 import { RelayError, Relayer } from './relayer';
 import { RpcProxy } from './rpc-proxy';
+import { dashboardRouter } from './dashboard';
 import { errorFields, log, newRequestId, withLogContext } from './log';
 
 export interface RelayApp {
@@ -47,7 +48,20 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
             nodePermitted: info.nodePermitted,
             enforceAccountRules: info.enforceAccountRules,
             currentGasLimit: info.currentGasLimit,
+            autoNonce: info.autoNonce,
+            autoNonceTicketMs: info.autoNonceTicketMs,
           });
+          if (info.autoNonce) {
+            // El handout serializa en memoria del proceso: con mas de una instancia por clave de
+            // writer node la garantia no existe (dos pedidos concurrentes caen en instancias
+            // distintas y se llevan el mismo nonce). Ver el README.
+            log.warn('relayer.auto_nonce', {
+              ticketMs: info.autoNonceTicketMs,
+              note:
+                'the relayer hands out nonces and serializes the requests of each user. The ' +
+                'guarantee holds per process: it requires a single instance per writer node key.',
+            });
+          }
           return { relayer, proxy: new RpcProxy(relayer, cfg.rpcUrl) };
         })
         .catch((err) => {
@@ -115,6 +129,10 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
     });
   }
 
+  // Monitor en vivo (`GET /dashboard`). No toca al relayer: lee el bus de eventos, que es un
+  // derivado del log, asi que montarlo no cambia en nada el camino de una metatx.
+  if (cfg.dashboardEnabled) app.use(dashboardRouter());
+
   app.get('/info', async (_req: Request, res: Response) => {
     try {
       const { relayer } = await ready();
@@ -131,7 +149,15 @@ export function createRelayApp(cfg: Config = defaultConfig): RelayApp {
       const { relayer } = await ready();
       // `nonce` = lo que dice la cadena; `nextNonce` = lo que hay que firmar ahora, contando
       // las metatx que este relayer ya mando y siguen sin minarse (necesario para encadenar).
-      const [nonce, nextNonce] = await Promise.all([relayer.getNonce(address), relayer.nextNonce(address)]);
+      //
+      // `nextNonce` pasa por el handout, asi que con AUTO_NONCE pedirlo RESERVA el numero para
+      // quien lo pidio. `?peek=true` mira sin reservar: es para inspeccionar (curl, pruebas) sin
+      // meterse en la cola de un cliente que esta mandando metatx.
+      const peek = req.query.peek === 'true' || req.query.peek === '1';
+      const [nonce, nextNonce] = await Promise.all([
+        relayer.getNonce(address),
+        peek ? relayer.nextNonce(address) : relayer.handOutNonce(address),
+      ]);
       res.json({
         address,
         nonce: nonce.toString(),

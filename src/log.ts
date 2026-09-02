@@ -15,6 +15,7 @@
  */
 import { AsyncLocalStorage } from 'async_hooks';
 import { randomBytes } from 'crypto';
+import { publish } from './events';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -54,6 +55,20 @@ export function newRequestId(): string {
   return randomBytes(6).toString('hex');
 }
 
+/**
+ * Id de una metatx concreta. Hace falta ademas del `reqId` porque un batch JSON-RPC puede traer
+ * varias metatx en una sola request HTTP: sin esto, sus eventos comparten `reqId` y no hay forma
+ * de saber cual `relay.sent` corresponde a cual `relay.received`.
+ */
+export function newMetaTxId(): string {
+  return randomBytes(4).toString('hex');
+}
+
+/** Id de este proceso, tal como sale en cada linea. */
+export function instanceId(): string {
+  return INSTANCE_ID;
+}
+
 /** Corre `fn` con un contexto de log que heredan todos los eventos asincronicos de adentro. */
 export function withLogContext<T>(ctx: LogContext, fn: () => T): T {
   return contextStore.run(ctx, fn);
@@ -79,10 +94,18 @@ export function errorFields(err: unknown): Record<string, unknown> {
   return out;
 }
 
-/** Serializa descartando `undefined` y convirtiendo bigint, que JSON.stringify no soporta. */
-function emit(level: LogLevel, event: string, fields: Record<string, unknown>): void {
-  if (SEVERITY[level] < SEVERITY[configuredLevel()]) return;
+/** Convierte bigint, que JSON.stringify no soporta. Lo comparte el stream del dashboard. */
+export function jsonReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value;
+}
 
+/**
+ * Serializa descartando `undefined` y convirtiendo bigint, que JSON.stringify no soporta.
+ *
+ * El evento va al bus (y de ahi al dashboard) sin mirar `LOG_LEVEL`: ese nivel regula que tanto
+ * ensucia la consola, no que tanto se puede observar. El dashboard filtra por su cuenta.
+ */
+function emit(level: LogLevel, event: string, fields: Record<string, unknown>): void {
   const ctx = contextStore.getStore();
   const line: Record<string, unknown> = {
     ts: new Date().toISOString(),
@@ -93,9 +116,13 @@ function emit(level: LogLevel, event: string, fields: Record<string, unknown>): 
     ...fields,
   };
 
+  publish(line);
+
+  if (SEVERITY[level] < SEVERITY[configuredLevel()]) return;
+
   let text: string;
   try {
-    text = JSON.stringify(line, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    text = JSON.stringify(line, jsonReplacer);
   } catch {
     // Un campo circular no puede tumbar el pedido que se estaba loggeando.
     text = JSON.stringify({ ts: line.ts, level, event, logError: 'no se pudo serializar el evento' });

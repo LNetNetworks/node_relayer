@@ -5,7 +5,7 @@
  *   npx tsx examples/nonce-stress.ts                          # 12 metatx de un usuario
  *   npx tsx examples/nonce-stress.ts --n 20 --users 3         # 20 por usuario, 3 usuarios a la vez
  *   npx tsx examples/nonce-stress.ts --overflow               # pasarse de MAX_INFLIGHT_PER_USER
- *   npx tsx examples/nonce-stress.ts --url http://host:3000 --to 0xContrato
+ *   npx tsx examples/nonce-stress.ts --url http://host:3001 --to 0xContrato
  *   npx tsx examples/nonce-stress.ts --quiet                  # solo el resumen y las verificaciones
  *   npx tsx examples/nonce-stress.ts --rest                   # por POST /relay en vez del proxy
  *
@@ -39,6 +39,13 @@
  * Los usuarios extra (`--users N`) son wallets random: en el modelo de gas no necesitan fondos ni
  * permissioning, solo firman. Con ENFORCE_ACCOUNT_RULES=true en el relayer no van a pasar, y el
  * script lo avisa antes de intentarlo.
+ *
+ * La rafaga va en UN solo proceso a proposito: el cursor local de `MetaTxClient` reparte los nonces
+ * dentro del proceso, asi que N corridas en paralelo sobre la misma wallet (el primer cliente es
+ * siempre USER_PRIVATE_KEY) firman nonces repetidos y se ven como BAD_NONCE con reintentos. Eso es
+ * esperable y AUTO_NONCE tampoco lo arregla: el handout serializado protege al cliente que pregunta
+ * por cada tx, no al que pregunta una vez y despues cuenta solo. Para ejercitar el handout hay que
+ * usar examples/hardhat-storage, que va con el LacchainSigner oficial (sin cursor).
  *
  * SUPUESTO: el relayer apuntado tiene que ser el unico proceso usando esa clave de writer node. Dos
  * instancias compartiendola se pisan en el nonce de la cuenta y esta prueba lo va a marcar como
@@ -77,7 +84,7 @@ function parseArgs(argv: string[]) {
     n: 12,
     users: 1,
     to: process.env.TARGET_ADDRESS,
-    url: process.env.RELAYER_URL ?? 'http://localhost:3000',
+    url: process.env.RELAYER_URL ?? 'http://localhost:3001',
     overflow: false,
     verbose: true,
     transport: 'rpc' as 'rest' | 'rpc',
@@ -355,9 +362,8 @@ async function main() {
     : fail(`quedaron metatx en vuelo: pending = ${pendings.join(', ')}`);
 
   if (args.overflow) {
-    // Pasarse del techo se manifiesta de dos formas, segun donde pegue la rafaga: TOO_MANY_INFLIGHT
-    // si la cadena ya tiene `maxInflight` sin receipt, o BAD_NONCE si lo que se lleno es la cola de
-    // espera de `awaitTurn` (que tiene el mismo techo) y la metatx entra a validar adelantada.
+    // Pasarse del techo sale siempre como TOO_MANY_INFLIGHT: el relayer lo chequea en la puerta,
+    // contando lo enviado sin receipt mas lo retenido en `awaitTurn`.
     const rejected = attempts.length - okAttempts.length;
     const codes = [...failuresByCode.entries()].map(([c, q]) => `${c} x${q}`).join(', ');
     rejected === 0

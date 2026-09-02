@@ -50,6 +50,9 @@ async function main() {
 
   server.listen(config.port, () => {
     console.log(`escuchando en http://localhost:${config.port}`);
+    if (config.dashboardEnabled) {
+      console.log(`dashboard en    http://localhost:${config.port}/dashboard`);
+    }
     console.log(`websocket en   ws://localhost:${config.port}  (upstream ${config.wsUrl || 'no configurado'})`);
   });
 }

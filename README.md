@@ -51,6 +51,10 @@ src/relayer.ts     nucleo: raw tx -> validaciones -> relayMetaTx -> resultado de
 src/server.ts      HTTP: REST simple + JSON-RPC drop-in
 src/rpc-proxy.ts   proxy JSON-RPC: lecturas al nodo, escrituras como metatx, batches
 src/ws-proxy.ts    lo mismo sobre WebSocket + eth_subscribe/eth_unsubscribe
+src/log.ts         log estructurado (una linea JSON por evento) + contexto por metatx
+src/events.ts      bus en memoria: el mismo log, para que alguien lo mire en vivo
+src/dashboard.ts   monitor en vivo: pagina + stream SSE del bus de eventos
+src/dashboard-page.ts  la pagina del monitor, embebida como string (sin build ni assets)
 src/metatx.ts      lado cliente: arma, firma y manda la metatx
 src/client.ts      CLI de ejemplo
 src/selftest.ts    verifica el modelo de gas contra el hub real por eth_call, sin gastar nada
@@ -58,6 +62,7 @@ src/deploy-storage.ts  prueba end-to-end: deploy de Storage + store/retrieve por
 contracts/         Storage.sol + BaseRelayRecipient.sol y el artifact compilado (abi + bytecode)
 examples/hardhat-storage/  deploy con Hardhat usando el LacchainSigner oficial
 examples/nonce-stress.ts   prueba de carga del manejo de nonces (rafagas simultaneas)
+examples/sequential-test.ts  la contracara: metatx de a una, con el nonce puesto por el cliente
 COMPARACION-GO-NODE.md     comparacion detallada con el relay-signer en Go
 ```
 
@@ -168,14 +173,14 @@ El contrato de prueba (`contracts/Storage.sol`, con su artifact ya compilado en
 Para validar el armado de la metatx contra el hub real **sin gastar un bloque**, correr antes
 `npm run selftest`: hace todo por `eth_call`.
 
-> El default de `RELAYER_URL` hardcodeado en `deploy-storage.ts` es `:3001`, mientras que el de
-> `.env.example` es `:3000`. Si cambias `PORT`, acordate de mover tambien `RELAYER_URL`.
+> El puerto local es `:3001` en todos lados (`PORT`, `RELAYER_URL` y los defaults hardcodeados
+> de los scripts de prueba). Si cambias `PORT`, acordate de mover tambien `RELAYER_URL`.
 O a mano:
 
 ```sh
-curl -s localhost:3000/info
-curl -s localhost:3000/nonce/0xUsuario
-curl -s -X POST localhost:3000/relay -H 'Content-Type: application/json' -d '{"rawTx":"0xf8..."}'
+curl -s localhost:3001/info
+curl -s localhost:3001/nonce/0xUsuario
+curl -s -X POST localhost:3001/relay -H 'Content-Type: application/json' -d '{"rawTx":"0xf8..."}'
 ```
 
 ### Endpoints
@@ -187,6 +192,8 @@ curl -s -X POST localhost:3000/relay -H 'Content-Type: application/json' -d '{"r
 | GET | `/info` | writer node, RelayHub, chainId, gas disponible en el bloque, AccountRules y si el node esta permisionado |
 | GET | `/nonce/:address` | `nonce` minado, `nextNonce` (contando metatx en vuelo, es el que hay que firmar) y `pending` |
 | POST | `/relay` | `{ "rawTx": "0x..." }` -> relaya y devuelve el resultado decodificado |
+| GET | `/dashboard` | [monitor en vivo](#monitor-en-vivo): como entran las metatx y como las reordena el relayer |
+| GET | `/dashboard/stream` | el mismo log estructurado por Server-Sent Events (lo consume la pagina) |
 
 ## Proxy JSON-RPC
 
@@ -229,7 +236,7 @@ hay un gateway adelante que ya las pone.
 
 ## WebSocket y eth_subscribe
 
-El mismo puerto acepta conexiones WebSocket (`ws://localhost:3000`), con el mismo ruteo que en
+El mismo puerto acepta conexiones WebSocket (`ws://localhost:3001`), con el mismo ruteo que en
 HTTP mas `eth_subscribe` / `eth_unsubscribe`. Un `WebSocketProvider` de ethers funciona sin
 cambios: lecturas, escrituras y `provider.on('block', ...)` sobre un solo socket.
 
@@ -264,7 +271,7 @@ que usan los dapps contra el relay-signer de LACChain, apuntada a este relayer.
 
 ```sh
 cd examples/hardhat-storage && npm install && npm run compile
-RELAYER_URL=http://localhost:3000 npm run deploy
+RELAYER_URL=http://localhost:3001 npm run deploy
 ```
 
 ### Prueba de carga de nonces
@@ -288,11 +295,42 @@ Verifica que los nonces del hub queden consecutivos y sin repetidos, que el nonc
 con lo enviado, que solo se simule la primera de cada cadena (solo visible con `--rest`) y que no
 queden metatx en vuelo. Medido en open-protestnet: **16/16 en 5 bloques** con un
 usuario y **24/24 con 3 usuarios**. Pasado `MAX_INFLIGHT_PER_USER` la cola de la rafaga se cae con
-`BAD_NONCE` (se llena la cola de espera), pero la cadena queda consistente: se pierden metatx, no se
-corrompe el nonce.
+`TOO_MANY_INFLIGHT`, pero la cadena queda consistente: se pierden metatx, no se corrompe el nonce.
 
 Sirve tambien como deteccion del supuesto de una sola instancia: si dos relayers comparten la clave
 del writer node, las tx se pisan en el nonce de la cuenta y la prueba lo marca con `RECEIPT_TIMEOUT`.
+
+### Prueba secuencial de nonces
+
+```sh
+npm run test:sequential                  # 6 metatx de a una, esperando el receipt de cada una
+npm run test:sequential -- --n 12
+npm run test:sequential -- --ask         # pidiendole el nonce al relayer antes de cada una
+npm run test:sequential -- --gap         # saltearse un nonce a proposito
+```
+
+La contracara de la de carga: en vez de una rafaga que el relayer tiene que encadenar, manda una
+metatx a la vez con el **nonce puesto por el cliente** (`send({ nonce })`, contador local desde el
+nonce del hub). Con el nonce fijado a mano `MetaTxClient` no reintenta ante `BAD_NONCE`, asi que
+cualquier desalineacion se ve como falla en vez de taparse con una refirma.
+
+Al esperar el receipt de cada una se pueden verificar cosas que la rafaga no permite afirmar: que
+el nonce del hub sube **exactamente uno** por metatx y que `retrieve()` devuelve el valor recien
+escrito en cada paso (en la rafaga gana la ultima minada, cualquiera es valida). Con `--gap` se
+saltea un nonce a proposito: la adelantada queda retenida en el buffer de reordenamiento, se
+rechaza con `BAD_NONCE` al vencer `REORDER_WINDOW_MS`, el nonce del hub no se mueve y la siguiente
+en orden entra igual.
+
+### Prueba del modo automatico del nonce
+
+```sh
+npm run test:auto-nonce                  # sin nodo y sin red
+```
+
+Cubre lo que la prueba de carga no puede provocar a mano: dos clientes del mismo usuario pidiendo
+el nonce **a la vez**, el ticket que vence sin usarse (y que no tiene que dejar hueco), el rechazo
+que libera la cola sin esperar el vencimiento, y el batch de JSON-RPC servido con nonces
+consecutivos. Ver [Modo automatico del nonce](#modo-automatico-del-nonce-auto_nonce).
 
 Como correrla, que verifica cada linea y como leer las fallas: [`examples/README.md`](examples/README.md).
 
@@ -305,7 +343,7 @@ import { MetaTxClient } from './src/metatx';
 const relayer = await Relayer.create();
 const result = await relayer.relay(rawTx);       // -> { transactionHash, executed, errorCodeName, ... }
 
-const client = new MetaTxClient(userPrivateKey, 'http://localhost:3000');
+const client = new MetaTxClient(userPrivateKey, 'http://localhost:3001');
 await client.call('0xContrato', 'store(uint256)', [42]);
 ```
 
@@ -432,6 +470,42 @@ Del lado cliente, `MetaTxClient` reparte los nonces con un cursor local (sin el,
 concurrentes firman todos el mismo valor) y reintenta ante `BAD_NONCE` resincronizando contra
 `nextNonce`.
 
+### Modo automatico del nonce (`AUTO_NONCE`)
+
+Por default el nonce lo maneja el **cliente**: pregunta, firma y manda, y si dos clientes del
+mismo usuario preguntan a la vez se llevan el mismo numero --el segundo se come un `BadNonce` y
+salir de ahi es problema suyo--. `MetaTxClient` lo resuelve con su cursor local, pero el
+`LacchainSigner` oficial no: pide el nonce por `eth_getTransactionCount` y firma lo que le
+contesten.
+
+Con `AUTO_NONCE=true` el nonce lo maneja el **relayer**: los pedidos de un mismo usuario se
+serializan y cada uno se lleva un numero distinto. El pedido se va con un *ticket* abierto y el
+siguiente espera a que se cierre, que pasa cuando llega la metatx firmada (el caso normal, en el
+orden de milisegundos) o cuando vence `AUTO_NONCE_TICKET_MS`.
+
+**Por que la serializacion va en la entrega y no en la recepcion.** El nonce viaja adentro de lo
+firmado (`signingData` es el RLP de la metatx, y el hub recupera el `from` de esos mismos bytes),
+asi que el relayer **no puede reescribirlo** al recibir la metatx: cambiarlo la invalida. Lo unico
+que controla es que numero entrega antes de que el cliente firme. Encolar del lado del envio no
+alcanza: dos metatx firmadas con el mismo nonce son invalidas en cadena en cualquier orden en que
+se manden.
+
+**Por que no es la reserva que se probo antes.** Un ticket que vence sin usarse no tapa el numero:
+`next` no avanzo, asi que el que estaba esperando se lleva exactamente el mismo nonce. Una reserva
+sin usar, en cambio, dejaba un hueco que solo su duenio podia destapar y trababa al resto.
+
+Lo que cambia y hay que tener en cuenta:
+
+- **Requiere una sola instancia**, mas fuerte que el resto del diseno: la cola vive en memoria del
+  proceso, asi que en Vercel dos pedidos concurrentes caen en instancias distintas y la garantia
+  no existe (ver [Supuesto: una sola instancia](#supuesto-una-sola-instancia)).
+- **Un cliente que pide nonces y no los usa hace esperar al resto** hasta
+  `AUTO_NONCE_TICKET_MS` por pedido. Es el techo del dano, no el caso normal.
+- **`GET /nonce/:address` reserva.** Para mirar sin meterse en la cola: `?peek=true`.
+- Los `eth_getTransactionCount` del mismo address que vienen en **un mismo batch** se sirven con
+  nonces consecutivos y un solo ticket (ethers v6 batchea por defecto, y servirlos de a uno los
+  trabaria entre si: el cliente no firma ninguna hasta que le vuelva el batch entero).
+
 ### Que rompe la cadena y que no
 
 Un **revert del contrato destino no la rompe**: el hub igual incrementa el nonce y emite
@@ -511,7 +585,9 @@ estetico, es funcional: Vercel indexa la salida como texto, asi que un objeto pl
 campo, y un log multilinea se partiria en entradas separadas.
 
 Cada linea lleva `instanceId` (el proceso que la emitio) y `reqId` (la request), y el `reqId`
-vuelve tambien en la cabecera `x-request-id` de la respuesta.
+vuelve tambien en la cabecera `x-request-id` de la respuesta. Los eventos `relay.*` llevan ademas
+`metaTxId`: un batch JSON-RPC mete varias metatx en una sola request HTTP, asi que el `reqId` solo
+no alcanza para saber que `relay.sent` corresponde a que `relay.received`.
 
 `instanceId` no es decorativo en Vercel: dos `instanceId` distintos relayando para el mismo `from`
 es exactamente el escenario que rompe el tracker de nonces (ver
@@ -529,6 +605,8 @@ por JSON-RPC y cuyo resultado final llega **despues** de haberle respondido al d
 | `http.bad_body` | warn | el body no es JSON valido |
 | `relay.received` | info | llego una raw tx: `rawTxBytes`, `rawTxHash` |
 | `relay.decoded` | info | metatx decodificada: from, to, nonce, gasLimits, nodeAddress, expiration, selector |
+| `relay.held` | info | llego adelantada y queda retenida en el buffer de reordenamiento: `nonce`, `expected`, `gap` |
+| `relay.turn` | info | sale del buffer: `heldMs` y `reason` (`in_turn`, `window_expired`, `too_many_inflight`) |
 | `relay.sent` | info | enviada a la cadena: txHash, **`writerNodeNonce`**, `hubNonce`, resultado de la simulacion |
 | `relay.settled` | info | resultado final: bloque, gasUsed, `executed`, `errorCode`, eventos del hub, `output` |
 | `relay.rejected` | warn | rechazada antes de enviarse, con el `code` de `RelayError` |
@@ -558,6 +636,40 @@ Tambien estan en el dashboard, en Deployments -> la funcion -> Runtime Logs.
 > no como registro historico. Si hace falta conservar el log de las metatx relayadas (auditoria,
 > reconciliacion), hay que mandarlo a un destino externo con un
 > [Log Drain](https://vercel.com/docs/log-drains), o escribir el resultado a una base ademas del log.
+
+## Monitor en vivo
+
+`GET /dashboard` sirve una pagina que muestra la rafaga mientras pasa: como entran las metatx por
+HTTP, cuales quedan retenidas en el buffer de reordenamiento y en que orden salen finalmente al
+hub.
+
+```sh
+npm run dev                                  # el banner imprime la URL del dashboard
+open http://localhost:3001/dashboard
+npm run test:nonces -- --n 12 --users 2      # y mirar la pagina mientras corre
+```
+
+Que muestra:
+
+- **Reordenamiento**: dos columnas, orden de llegada contra orden de envio, con una curva por
+  metatx. Las curvas que cruzan son las que el relayer reordeno; el resto llego ya en orden.
+- **Linea de tiempo**: una fila por metatx con sus tramos reales -- en el relayer, retenida en el
+  buffer, y en la cadena hasta el receipt -- mas como termino. `ver tabla` muestra lo mismo en
+  texto, con los dos nonces (el del hub y el de la cuenta del writer node).
+- **Eventos**: el log estructurado crudo, filtrable, tal cual sale por stdout.
+
+No consulta la cadena ni toca el camino de una metatx: se alimenta del mismo log estructurado
+(`src/events.ts` es un bus en memoria alimentado por `src/log.ts`) y lo empuja por Server-Sent
+Events. Se retienen los ultimos `DASHBOARD_BUFFER` eventos, asi que una pestana que se abre tarde
+--o que se reconecta-- recupera lo que se perdio.
+
+Dos limitaciones que vienen del diseno del relayer:
+
+- El bus vive en memoria del proceso, igual que el tracker de nonces
+  ([una sola instancia](#supuesto-una-sola-instancia)). En Vercel cada pagina ve la instancia que
+  le toco, y una conexion SSE dura lo que dure esa invocacion.
+- **No autentica**, como el resto del servicio: publica quien mando cada metatx, con que nonce y
+  contra que contrato. Si la URL del relayer es publica, `DASHBOARD=false`.
 
 ## Despliegue en Vercel
 

@@ -16,7 +16,7 @@ const config: HardhatUserConfig = {
   },
   networks: {
     lacchain: {
-      url: process.env.RELAYER_URL ?? 'http://localhost:3000',
+      url: process.env.RELAYER_URL ?? 'http://localhost:3001',
       gasPrice: 0,
       // Hardhat no firma nada: la metatx la firma LacchainSigner en el script.
       accounts: [],

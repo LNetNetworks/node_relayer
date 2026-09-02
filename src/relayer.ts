@@ -19,7 +19,15 @@ import {
   relayHubContract,
   resolveRelayHubAddress,
 } from './relayhub';
-import { errorFields, log, shouldLogRawTx } from './log';
+import {
+  currentLogContext,
+  errorFields,
+  log,
+  newMetaTxId,
+  newRequestId,
+  shouldLogRawTx,
+  withLogContext,
+} from './log';
 
 /** Saca el mensaje util de un error de ethers/JSON-RPC, sin el volcado del payload. */
 function upstreamMessage(err: any): string {
@@ -102,10 +110,25 @@ interface RawLog {
   data: string;
 }
 
-/** Sender de la raw tx para elegir el lock, sin fallar: si no parsea, doRelay da el error lindo. */
-function safeSender(rawTx: string): string | null {
+/**
+ * Ticket del handout de nonce: un numero ya entregado a un cliente y todavia sin usar.
+ *
+ * Mientras vive, el proximo pedido de nonce del mismo usuario espera. Eso es todo el modo
+ * automatico: dos clientes concurrentes no pueden llevarse el mismo numero sin que ninguno de los
+ * dos tenga que cooperar --les alcanza con preguntar por `eth_getTransactionCount`, que es lo que
+ * ya hace el `LacchainSigner` oficial--.
+ */
+interface NonceTicket {
+  nonce: bigint;
+  /** Cierra el ticket y libera al siguiente pedido. Idempotente. */
+  close: (reason: string) => void;
+}
+
+/** `from` y `nonce` de una raw tx, sin fallar: si no parsea, doRelay ya da el error lindo. */
+function safeIdentity(rawTx: string): { from: string; nonce: bigint } | null {
   try {
-    return Transaction.from(rawTx).from ?? null;
+    const tx = Transaction.from(rawTx);
+    return tx.from === null ? null : { from: tx.from, nonce: BigInt(tx.nonce) };
   } catch {
     return null;
   }
@@ -177,8 +200,14 @@ export interface RelayerInfo {
   minExpirationSeconds: number;
   /** Tolerancia con la que se aplica ese minimo: el piso real es la resta de los dos. */
   expirationToleranceSeconds: number;
-  /** Metatx en vuelo que se le permiten a un mismo usuario antes de responder TOO_MANY_INFLIGHT. */
+  /** Metatx en vuelo (enviadas sin receipt + retenidas) por address antes de TOO_MANY_INFLIGHT. */
   maxInflightPerUser: number;
+  /** Cuanto retiene el relayer una metatx que llego adelantada antes de rechazarla, en ms. */
+  reorderWindowMs: number;
+  /** true = el nonce lo maneja el relayer: los pedidos del mismo usuario se serializan. */
+  autoNonce: boolean;
+  /** Cuanto retiene el handout un nonce entregado y sin usar, en ms (0 si autoNonce es false). */
+  autoNonceTicketMs: number;
 }
 
 export class Relayer {
@@ -216,6 +245,19 @@ export class Relayer {
    * rafaga del mismo usuario se cae la que se adelanto.
    */
   private turnWaiters = new Map<string, Set<() => void>>();
+
+  /**
+   * Cola del handout de nonce por usuario (solo con `AUTO_NONCE=true`). Cada pedido encadena el
+   * suyo, y la cadena no avanza hasta que el ticket del pedido anterior se cierra.
+   *
+   * MISMO SUPUESTO QUE `inflight`: vive en memoria del proceso, o sea una sola instancia por
+   * clave de writer node. Dos instancias reparten nonces sin verse y el modo automatico deja de
+   * dar la garantia (ver "Supuesto: una sola instancia" en el README).
+   */
+  private handoutChain = new Map<string, Promise<unknown>>();
+
+  /** Ticket abierto por usuario: el nonce entregado que todavia no llego firmado. */
+  private tickets = new Map<string, NonceTicket>();
 
   /**
    * Ultimo resultado de `accountPermitted(writer node)`. Se lee al arrancar para avisar temprano
@@ -321,6 +363,9 @@ export class Relayer {
       minExpirationSeconds: this.cfg.enforceExpiration ? this.cfg.minExpirationSeconds : 0,
       expirationToleranceSeconds: this.cfg.enforceExpiration ? this.cfg.expirationToleranceSeconds : 0,
       maxInflightPerUser: this.cfg.maxInflightPerUser,
+      reorderWindowMs: this.cfg.reorderWindowMs,
+      autoNonce: this.cfg.autoNonce,
+      autoNonceTicketMs: this.cfg.autoNonce ? this.cfg.autoNonceTicketMs : 0,
     };
   }
 
@@ -405,6 +450,155 @@ export class Relayer {
   }
 
   /**
+   * El nonce que el cliente tiene que firmar AHORA. Es lo que contesta `eth_getTransactionCount`
+   * con 'pending' y `GET /nonce/:address`.
+   *
+   * Con `AUTO_NONCE=false` (default) es `nextNonce()` pelado: el relayer contesta lo que sabe, y
+   * si dos clientes preguntan a la vez se llevan el mismo numero. El segundo firma un nonce que el
+   * hub ya no va a aceptar y se come un BadNonce; salir de ahi es problema del cliente.
+   *
+   * Con `AUTO_NONCE=true` el nonce lo maneja el relayer: los pedidos del mismo usuario se
+   * serializan y cada uno se lleva un numero distinto. El pedido se va con un ticket abierto y el
+   * siguiente espera a que se cierre, que pasa al llegar la metatx firmada (el caso normal, en el
+   * orden de milisegundos) o al vencer `AUTO_NONCE_TICKET_MS`.
+   *
+   * Por que no se puede hacer del otro lado: el nonce va adentro de lo firmado, asi que el relayer
+   * no puede reescribirlo al recibir la metatx --el hub recupera el `from` de esos mismos bytes--.
+   * Lo unico que controla es el numero que entrega antes de que el cliente firme, y por eso la
+   * serializacion tiene que estar aca.
+   *
+   * Por que no es la reserva que se probo antes: un ticket que vence sin usarse NO tapa el numero.
+   * `next` no avanzo, asi que el que estaba esperando se lleva exactamente el mismo nonce. En el
+   * esquema de reserva la reserva sin usar dejaba un hueco que solo su duenio podia destapar, y el
+   * resto de los clientes se trababa detras.
+   */
+  async handOutNonce(user: string): Promise<bigint> {
+    return (await this.handOutNonces(user, 1))[0];
+  }
+
+  /**
+   * Igual que `handOutNonce`, pero para varios pedidos que llegaron JUNTOS: devuelve `count`
+   * nonces consecutivos y abre un solo ticket, sobre el ultimo.
+   *
+   * Existe por el batch de JSON-RPC. Ethers v6 batchea por defecto, asi que un `Promise.all` de
+   * tres escrituras llega como tres `eth_getTransactionCount` en la MISMA request HTTP. Servirlos
+   * de a uno con su ticket los trabaria entre si: el cliente no firma ninguna hasta que le vuelva
+   * el batch entero, asi que ningun ticket se cerraria y los tres se resolverian por vencimiento
+   * --lentos y, encima, con el mismo numero--. Consecutivos es lo que el cliente pidio y ademas es
+   * estrictamente mejor que el comportamiento sin AUTO_NONCE, donde los tres se llevan el mismo.
+   */
+  async handOutNonces(user: string, count: number): Promise<bigint[]> {
+    const address = getAddress(user);
+    const size = Math.max(1, count);
+    if (!this.cfg.autoNonce) {
+      const base = await this.nextNonce(address);
+      // Sin modo automatico se contesta lo mismo N veces, que es el comportamiento historico.
+      return Array.from({ length: size }, () => base);
+    }
+
+    const previous = this.handoutChain.get(address) ?? Promise.resolve();
+    let release!: () => void;
+    const ticketClosed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // La cadena del usuario se extiende hasta el CIERRE del ticket, no hasta que se conteste:
+    // el siguiente pedido tiene que esperar a que este nonce se use, no a que se entregue.
+    const mine = previous.then(
+      () => ticketClosed,
+      () => ticketClosed,
+    );
+    this.handoutChain.set(address, mine);
+    // Sin esto el Map se queda con una cadena por cada usuario que alguna vez pidio un nonce.
+    mine.then(() => {
+      if (this.handoutChain.get(address) === mine) this.handoutChain.delete(address);
+    });
+
+    const queuedAt = Date.now();
+    await previous.catch(() => undefined);
+
+    let base: bigint;
+    try {
+      base = await this.nextNonce(address);
+    } catch (err) {
+      // El pedido fallo (el nodo no contesto): cerrar igual, si no la cola del usuario se queda
+      // esperando un ticket que nunca se abrio.
+      release();
+      throw err;
+    }
+    const nonces = Array.from({ length: size }, (_, i) => base + BigInt(i));
+    // El ticket va sobre el ULTIMO: la cola se reabre cuando llega la ultima metatx del grupo.
+    this.openTicket(address, nonces[nonces.length - 1], release, Date.now() - queuedAt, size);
+    return nonces;
+  }
+
+  /** Abre el ticket de `nonce` para `user` y arma su vencimiento. */
+  private openTicket(
+    user: string,
+    nonce: bigint,
+    release: () => void,
+    queuedMs: number,
+    handedOut: number,
+  ): void {
+    const issuedAt = Date.now();
+    let closed = false;
+    const close = (reason: string): void => {
+      if (closed) return;
+      closed = true;
+      clearTimeout(timer);
+      if (this.tickets.get(user) === ticket) this.tickets.delete(user);
+      log.info('nonce.ticket_closed', { from: user, nonce, heldMs: Date.now() - issuedAt, reason });
+      release();
+    };
+    const timer = setTimeout(() => close('expired'), this.cfg.autoNonceTicketMs);
+    timer.unref?.();
+    const ticket: NonceTicket = { nonce, close };
+    this.tickets.set(user, ticket);
+    log.info('nonce.handed_out', {
+      from: user,
+      nonce,
+      // >1 significa que el pedido vino batcheado y se sirvio con nonces consecutivos.
+      handedOut,
+      // Cuanto espero este pedido a que se cerrara el ticket anterior: si crece, el cuello de
+      // botella es el round-trip del cliente entre pedir el nonce y mandar la metatx firmada.
+      queuedMs,
+      ticketMs: this.cfg.autoNonceTicketMs,
+    });
+  }
+
+  /**
+   * Cierra el ticket que corresponde a esta raw tx, si hay uno abierto con su mismo nonce.
+   *
+   * Corre haya salido bien o mal el relay: si la metatx fue rechazada el nonce no se consumio, y
+   * el que esta esperando se lleva el mismo numero. Cerrar siempre es lo que evita que un rechazo
+   * trabe al usuario hasta que venza el ticket.
+   */
+  private closeTicketFor(rawTx: string, reason: string): void {
+    const id = safeIdentity(rawTx);
+    if (id === null) return;
+    const ticket = this.tickets.get(id.from);
+    if (ticket !== undefined && ticket.nonce === id.nonce) ticket.close(reason);
+  }
+
+  /**
+   * Metatx que este relayer tiene tomadas por `user`: las enviadas sin receipt mas las que
+   * llegaron adelantadas y estan retenidas en `awaitTurn`. Las dos ocupan cupo de la rafaga
+   * (una retenida ya reservo su lugar en la cadena de nonces), asi que el techo mira la suma.
+   */
+  private inflightFor(user: string): number {
+    return (this.inflight.get(user)?.pending ?? 0) + (this.turnWaiters.get(user)?.size ?? 0);
+  }
+
+  /** El rechazo por techo de rafaga, con el mismo texto en los tres puntos donde se aplica. */
+  private tooManyInflight(user: string, inflight: number): RelayError {
+    return new RelayError(
+      `Exceeded the inflight tx limit for the address ${user}: ${inflight} metatx in flight, ` +
+        `maximum ${this.cfg.maxInflightPerUser}. Wait for them to be mined before sending more.`,
+      'TOO_MANY_INFLIGHT',
+      { inflight, max: this.cfg.maxInflightPerUser },
+    );
+  }
+
+  /**
    * Descarta lo que el relayer creia saber del usuario: la proxima metatx relee la cadena.
    * Se llama cuando la cadena de nonces se rompio o se termino de vaciar.
    */
@@ -426,6 +620,7 @@ export class Relayer {
   /**
    * Retiene una metatx que llego antes de tiempo hasta que su nonce sea el proximo esperado.
    * Al vencer la ventana sigue igual y `submit` la rechaza con BAD_NONCE y el nonce correcto.
+   * Si el address ya llego al techo de la rafaga, no espera: lanza TOO_MANY_INFLIGHT.
    *
    * La ventana mide **estancamiento**, no espera total: cada vez que la cadena avanza hacia este
    * nonce se renueva. Si midiera el total, una rafaga larga perderia la cola por reloj aunque todo
@@ -435,9 +630,38 @@ export class Relayer {
   private async awaitTurn(user: string, nonce: bigint): Promise<void> {
     let deadline = Date.now() + this.cfg.reorderWindowMs;
     let lastExpected: bigint | null = null;
+    // La retencion es lo unico del reordenamiento que no se ve en ningun otro evento: sin estos
+    // dos logs, una metatx adelantada aparece como un `relay.sent` tardio y sin explicacion.
+    const waitStartedAt = Date.now();
+    let held = false;
+    const release = (reason: string, expected: bigint): void => {
+      if (!held) return;
+      log.info('relay.turn', {
+        from: user,
+        nonce,
+        expected,
+        heldMs: Date.now() - waitStartedAt,
+        reason,
+      });
+    };
+
     for (;;) {
       const expected = this.inflight.get(user)?.next ?? (await this.getNonce(user));
-      if (nonce <= expected) return;
+      if (nonce <= expected) {
+        release('in_turn', expected);
+        return;
+      }
+
+      if (!held) {
+        held = true;
+        log.info('relay.held', {
+          from: user,
+          nonce,
+          expected,
+          gap: nonce - expected,
+          windowMs: this.cfg.reorderWindowMs,
+        });
+      }
 
       if (lastExpected === null || expected > lastExpected) {
         lastExpected = expected;
@@ -445,11 +669,22 @@ export class Relayer {
       }
 
       const remaining = deadline - Date.now();
-      if (remaining <= 0) return;
+      if (remaining <= 0) {
+        release('window_expired', expected);
+        return;
+      }
+
+      // No acumular esperas sin techo. Antes se seguia de largo y `submit` la rechazaba con
+      // BAD_NONCE: el motivo real (la rafaga se paso del techo) quedaba tapado. El chequeo se
+      // repite aca y no solo en la puerta porque mientras esta espera el cupo se puede llenar.
+      const inflight = this.inflightFor(user);
+      if (inflight >= this.cfg.maxInflightPerUser) {
+        release('too_many_inflight', expected);
+        throw this.tooManyInflight(user, inflight);
+      }
 
       const waiters = this.turnWaiters.get(user) ?? new Set<() => void>();
       this.turnWaiters.set(user, waiters);
-      if (waiters.size >= this.cfg.maxInflightPerUser) return; // no acumular esperas sin techo
 
       await new Promise<void>((resolve) => {
         const wake = () => {
@@ -460,6 +695,8 @@ export class Relayer {
         const timer = setTimeout(wake, remaining);
         waiters.add(wake);
       });
+      // Sin esto el Map se queda con un Set vacio por cada usuario que alguna vez espero turno.
+      if (waiters.size === 0 && this.turnWaiters.get(user) === waiters) this.turnWaiters.delete(user);
     }
   }
 
@@ -498,6 +735,17 @@ export class Relayer {
    * `settled` resuelve cuando la metatx se mina; el caller puede ignorarlo.
    */
   async submitRelay(rawTx: string): Promise<SubmittedRelay> {
+    // Contexto de log propio de esta metatx. Hace falta ademas del `reqId` porque un batch
+    // JSON-RPC mete varias metatx en una sola request HTTP; con el id, cada fase (decoded,
+    // held, sent, settled --que sale mucho despues de haber respondido) se puede seguir sola.
+    const outer = currentLogContext();
+    return withLogContext(
+      { ...(outer ?? {}), reqId: outer?.reqId ?? newRequestId(), metaTxId: newMetaTxId() },
+      () => this.trackedRelay(rawTx),
+    );
+  }
+
+  private async trackedRelay(rawTx: string): Promise<SubmittedRelay> {
     const startedAt = Date.now();
     log.info('relay.received', {
       rawTxBytes: Math.max(0, (rawTx.length - 2) / 2),
@@ -510,6 +758,12 @@ export class Relayer {
       // Un rechazo es informacion de operacion, no un fallo del servicio: va como warn.
       log.warn('relay.rejected', { ms: Date.now() - startedAt, ...errorFields(err) });
       throw err;
+    } finally {
+      // AUTO_NONCE: el nonce que este relayer entrego ya llego firmado, asi que el handout puede
+      // seguir con el proximo pedido del usuario. Va en el `finally` a proposito: si la metatx fue
+      // rechazada el nonce no se consumio y el que espera se lleva el mismo numero, pero dejar el
+      // ticket abierto lo haria esperar el vencimiento completo por un rechazo instantaneo.
+      if (this.cfg.autoNonce) this.closeTicketFor(rawTx, 'relay');
     }
   }
 
@@ -578,6 +832,13 @@ export class Relayer {
         );
       }
     }
+    // Techo de rafaga por address, aplicado en la puerta: antes de gastar el eth_call de
+    // AccountRules y antes de que la metatx se ponga a esperar turno. Rechazar aca es lo que
+    // hace que pasarse del techo se vea siempre como TOO_MANY_INFLIGHT y no como un BAD_NONCE
+    // tardio (la que se pasaba entraba a esperar, se caia de la ventana y llegaba adelantada).
+    const inflight = this.inflightFor(from);
+    if (inflight >= this.cfg.maxInflightPerUser) throw this.tooManyInflight(from, inflight);
+
     // Antes de reservar nonce y de gastar la simulacion: si el sender no pasa, no hay nada mas que hacer.
     if (this.cfg.enforceAccountRules) await this.assertSenderPermitted(from);
 
@@ -744,13 +1005,10 @@ export class Relayer {
     const { from, tx, method, isDeploy, signingData, v, r, s, gasLimit, overrides } = ctx;
     const entry = this.inflight.get(from);
 
+    // Ultima red del techo, ya adentro del lock del usuario: entre el chequeo de la puerta y
+    // aca pudieron entrar otras de la misma rafaga (el cupo se toma recien al reservar nonce).
     if (entry && entry.pending >= this.cfg.maxInflightPerUser) {
-      throw new RelayError(
-        `${from} already has ${entry.pending} metatx in flight (maximum ${this.cfg.maxInflightPerUser}). ` +
-          'Wait for them to be mined before sending more.',
-        'TOO_MANY_INFLIGHT',
-        { pending: entry.pending, max: this.cfg.maxInflightPerUser },
-      );
+      throw this.tooManyInflight(from, entry.pending);
     }
 
     // Con metatx en vuelo el nonce de la cadena esta atrasado: manda lo que ya reservamos.
