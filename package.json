@@ -13,7 +13,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.api.json --noEmit",
     "selftest": "tsx src/selftest.ts",
     "test:deploy": "tsx src/deploy-storage.ts",
-    "test:nonces": "tsx examples/nonce-stress.ts"
+    "test:nonces": "tsx examples/nonce-stress.ts",
+    "test:sequential": "tsx examples/sequential-test.ts",
+    "test:auto-nonce": "tsx examples/auto-nonce.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

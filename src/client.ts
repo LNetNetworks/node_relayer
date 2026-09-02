@@ -23,7 +23,7 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const relayerUrl = process.env.RELAYER_URL ?? 'http://localhost:3000';
+  const relayerUrl = process.env.RELAYER_URL ?? 'http://localhost:3001';
   const privateKey = process.env.USER_PRIVATE_KEY;
   const to = args.to ?? process.env.TARGET_ADDRESS;
 

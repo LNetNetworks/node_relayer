@@ -94,9 +94,18 @@ export class RpcProxy {
     const forwarded: { index: number; req: JsonRpcRequest }[] = [];
     const local: Promise<void>[] = [];
 
+    // Los pedidos de nonce pending del mismo address se juntan: se sirven con nonces consecutivos
+    // en un solo paso por el handout, en vez de competir entre si (ver `fillNonceGroup`).
+    const nonceGroups = new Map<string, { index: number; req: JsonRpcRequest }[]>();
+
     reqs.forEach((req, index) => {
       if (this.isPassthrough(req)) {
         forwarded.push({ index, req });
+      } else if (this.isPendingNonceRequest(req)) {
+        const user = getAddress((req.params as unknown[])[0] as string);
+        const group = nonceGroups.get(user) ?? [];
+        group.push({ index, req });
+        nonceGroups.set(user, group);
       } else {
         local.push(
           this.route(req).then((res) => {
@@ -105,6 +114,20 @@ export class RpcProxy {
         );
       }
     });
+
+    for (const group of nonceGroups.values()) {
+      // Un pedido suelto sigue por `route`, para no saltearse el log de `rpc.call`.
+      if (group.length === 1) {
+        local.push(
+          this.route(group[0].req).then((res) => {
+            slots[group[0].index] = res;
+          }),
+        );
+      } else {
+        log.info('rpc.nonce_batch', { method: 'eth_getTransactionCount', count: group.length });
+        local.push(this.fillNonceGroup(group, slots));
+      }
+    }
 
     await Promise.all([
       ...local,
@@ -209,11 +232,49 @@ export class RpcProxy {
     if (typeof address !== 'string') {
       return fail(id, INVALID_PARAMS, 'params[0] must be an address');
     }
-    // "latest" -> lo minado; "pending" (o sin bloque) -> contando lo que el relayer tiene en vuelo,
-    // que es el equivalente al nonce pending de una cuenta normal y lo que hay que firmar.
+    // "latest" -> lo minado; "pending" (o sin bloque) -> el nonce que hay que firmar ahora, que
+    // cuenta lo que el relayer tiene en vuelo y, con AUTO_NONCE, sale del handout serializado.
     const user = getAddress(address);
-    const nonce = params[1] === 'latest' ? await this.relayer.getNonce(user) : await this.relayer.nextNonce(user);
+    const nonce =
+      params[1] === 'latest' ? await this.relayer.getNonce(user) : await this.relayer.handOutNonce(user);
     return ok(id, '0x' + nonce.toString(16));
+  }
+
+  /**
+   * Sirve los `eth_getTransactionCount` pending de un mismo address que venian en el MISMO batch,
+   * con nonces consecutivos y un solo paso por el handout.
+   *
+   * Hace falta porque ethers v6 batchea: un `Promise.all` de tres escrituras llega como tres
+   * pedidos de nonce en una sola request HTTP. Servirlos por separado con AUTO_NONCE los trabaria
+   * entre si --el cliente no firma ninguna hasta que vuelva el batch, asi que ningun ticket del
+   * handout se cerraria y los tres se resolverian recien al vencer--.
+   */
+  private async fillNonceGroup(entries: { index: number; req: JsonRpcRequest }[], slots: (JsonRpcResponse | null)[]) {
+    const user = getAddress((entries[0].req.params as unknown[])[0] as string);
+    let nonces: bigint[];
+    try {
+      nonces = await this.relayer.handOutNonces(user, entries.length);
+    } catch (err) {
+      for (const { index, req } of entries) slots[index] = fail(req.id, INTERNAL_ERROR, (err as Error).message);
+      return;
+    }
+    entries.forEach(({ index, req }, i) => {
+      slots[index] = ok(req.id, '0x' + nonces[i].toString(16));
+    });
+  }
+
+  /** true si el pedido es un `eth_getTransactionCount` pending, que es lo que agrupa el batch. */
+  private isPendingNonceRequest(req: JsonRpcRequest): boolean {
+    if (req.method !== 'eth_getTransactionCount') return false;
+    const params = Array.isArray(req.params) ? req.params : [];
+    if (typeof params[0] !== 'string') return false;
+    if (params[1] === 'latest') return false;
+    try {
+      getAddress(params[0]);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async getTransactionReceipt(id: unknown, params: unknown[]): Promise<JsonRpcResponse> {

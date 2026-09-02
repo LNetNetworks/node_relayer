@@ -30,7 +30,7 @@ async function relayerInfo(url: string): Promise<{ nodeAddress: string; relayHub
 }
 
 async function main() {
-  const relayerUrl = process.env.RELAYER_URL ?? 'http://localhost:3000';
+  const relayerUrl = process.env.RELAYER_URL ?? 'http://localhost:3001';
   const info = await relayerInfo(relayerUrl);
   const nodeAddress = process.env.NODE_ADDRESS?.trim() || info.nodeAddress;
   const expiration = Math.floor(Date.now() / 1000) + Number(process.env.EXPIRATION_SECONDS ?? 86_400);

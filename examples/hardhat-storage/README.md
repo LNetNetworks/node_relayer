@@ -21,14 +21,14 @@ Con el relayer levantado (`npm start` en la raiz del repo):
 ```sh
 npm install
 npm run compile
-RELAYER_URL=http://localhost:3000 npm run deploy
+RELAYER_URL=http://localhost:3001 npm run deploy
 ```
 
 Salida esperada:
 
 ```
 --- deploy de Storage por metatx ---
-relayer     : http://localhost:3000
+relayer     : http://localhost:3001
 writer node : 0x248906Bf539e8f16FbD14c001f7Bd3D712f95D3E
 usuario     : 0x0255F6F1976d8476CF127a0B1c2971e9a06c9eE1
 chainId     : 648540

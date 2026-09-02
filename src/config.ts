@@ -53,7 +53,7 @@ function optionalAddress(name: string): string | undefined {
 }
 
 export const config = {
-  port: Number(process.env.PORT ?? 3000),
+  port: Number(process.env.PORT ?? 3001),
 
   /**
    * RPC del nodo. IMPORTANTE: tiene que ser el JSON-RPC crudo de Besu.
@@ -131,7 +131,8 @@ export const config = {
   receiptTimeoutMs: Number(process.env.RECEIPT_TIMEOUT_MS ?? 60_000),
 
   /**
-   * Metatx en vuelo (enviadas y sin receipt) que se le permiten a un mismo usuario.
+   * Metatx en vuelo que se le permiten a un mismo address, contando las enviadas sin receipt
+   * y las retenidas esperando turno. La que se pasa se rechaza con TOO_MANY_INFLIGHT.
    * Acota el dano si la cadena de nonces se rompe: todas las posteriores a la que falla
    * las rechaza el hub on-chain, y cada una gasta una tx del writer node.
    */
@@ -142,6 +143,42 @@ export const config = {
    * Sobre HTTP el orden de llegada no esta garantizado, y el hub exige el nonce exacto.
    */
   reorderWindowMs: Number(process.env.REORDER_WINDOW_MS ?? 3_000),
+
+  /**
+   * Modo automatico del nonce: el nonce lo maneja el relayer, no el cliente.
+   *
+   * El nonce va DENTRO de lo que el usuario firma (`signingData` es el RLP de la metatx, y el hub
+   * exige `nonces[writerNode][from] == nonce`), asi que el relayer no puede reescribirlo: lo unico
+   * que controla es que numero le entrega al cliente ANTES de que firme. Prendido, los pedidos de
+   * nonce de un mismo usuario se serializan y cada uno se lleva un numero distinto, en vez de que
+   * dos clientes concurrentes se lleven el mismo y uno se coma un BadNonce.
+   *
+   * Apagado (default) el comportamiento es el historico: el relayer contesta lo que sabe y quien
+   * pipelinea se arregla solo (`MetaTxClient` lleva su propio cursor y reintenta ante BAD_NONCE).
+   */
+  autoNonce: (process.env.AUTO_NONCE ?? 'false') === 'true',
+
+  /**
+   * Cuanto retiene el handout el nonce que acaba de entregar antes de dejar pasar al siguiente
+   * pedido del mismo usuario. Se cierra antes si la metatx firmada llega, que es el caso normal:
+   * esto es solo el techo para el cliente que pide un nonce y no lo usa.
+   *
+   * Vencerlo NO deja hueco: como `next` no avanzo, el que estaba esperando se lleva el mismo
+   * numero. Es la diferencia con reservar el nonce del lado del cliente, donde una reserva sin
+   * usar tapaba el numero y trababa a todos los demas.
+   */
+  autoNonceTicketMs: Number(process.env.AUTO_NONCE_TICKET_MS ?? 2_000),
+
+  /**
+   * Monitor en vivo en `GET /dashboard`: muestra como entran las metatx y como las reordena el
+   * buffer de nonces. Se alimenta del log, no consulta la cadena. Como el resto del servicio no
+   * autentica, y publica quien mando cada metatx y contra que contrato: apagarlo (DASHBOARD=false)
+   * si la URL del relayer es publica.
+   *
+   * `src/events.ts` lee la misma variable por su cuenta para poder apagar el bus sin importar
+   * config (y sin pagar nada por linea de log cuando esta apagado).
+   */
+  dashboardEnabled: (process.env.DASHBOARD ?? 'true') !== 'false',
 
   /**
    * Origen permitido por CORS, para que un dapp de browser pueda apuntar su provider aca.
