@@ -63,7 +63,8 @@ contracts/         Storage.sol + BaseRelayRecipient.sol y el artifact compilado 
 examples/hardhat-storage/  deploy con Hardhat usando el LacchainSigner oficial
 examples/nonce-stress.ts   prueba de carga del manejo de nonces (rafagas simultaneas)
 examples/sequential-test.ts  la contracara: metatx de a una, con el nonce puesto por el cliente
-COMPARACION-GO-NODE.md     comparacion detallada con el relay-signer en Go
+COMPARACION-GO-NODE.md     comparacion detallada con el relay-signer en Go (nonces, concurrencia, cupo de gas)
+ENDPOINTS-GO-VS-NODE.md    comparacion de la superficie HTTP/RPC de los dos, y como migrar un cliente
 ```
 
 ## Uso
@@ -435,6 +436,10 @@ lo que habria que sumarle para reemplazar al oficial en un despliegue multi-tena
 El detalle largo -- por que el de Go no llega a encadenar metatx, que valida cada uno y los riesgos
 abiertos de este, con las referencias al codigo -- esta en
 [`COMPARACION-GO-NODE.md`](./COMPARACION-GO-NODE.md).
+
+Y la comparacion **endpoint por endpoint** (rutas, metodos, forma de las respuestas, errores y guia
+de migracion en los dos sentidos) esta en
+[`ENDPOINTS-GO-VS-NODE.md`](./ENDPOINTS-GO-VS-NODE.md).
 
 ## Nonces y concurrencia
 

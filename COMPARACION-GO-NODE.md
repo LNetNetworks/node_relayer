@@ -11,6 +11,10 @@ Del lado de Go hay **dos** variantes vivas, y hoy comparten el nucleo:
   el mecanismo anti-bloqueo del clasico"*), asi que todo lo que se dice aca sobre nonces vale para
   los dos. Las diferencias del fork son de multi-tenancy, no de modelo de gas.
 
+Este documento es sobre **comportamiento** (nonces, concurrencia, cupo de gas). La comparacion de
+la **superficie HTTP/RPC** -- que rutas expone cada uno, que devuelve cada metodo y como migrar un
+cliente -- esta en [`ENDPOINTS-GO-VS-NODE.md`](./ENDPOINTS-GO-VS-NODE.md).
+
 El resumen esta en la tabla de abajo; el desarrollo largo es sobre nonces y concurrencia, que es
 donde estan las diferencias de fondo. Despues va lo que el de Go hace y este todavia no, y los
 riesgos abiertos de este.
