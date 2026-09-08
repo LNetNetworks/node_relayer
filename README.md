@@ -65,6 +65,7 @@ examples/nonce-stress.ts   prueba de carga del manejo de nonces (rafagas simulta
 examples/sequential-test.ts  la contracara: metatx de a una, con el nonce puesto por el cliente
 COMPARACION-GO-NODE.md     comparacion detallada con el relay-signer en Go (nonces, concurrencia, cupo de gas)
 ENDPOINTS-GO-VS-NODE.md    comparacion de la superficie HTTP/RPC de los dos, y como migrar un cliente
+DASHBOARD.md               el monitor en vivo: arquitectura, paneles y como leer la cola de nonces
 ```
 
 ## Uso
@@ -647,6 +648,10 @@ Tambien estan en el dashboard, en Deployments -> la funcion -> Runtime Logs.
 `GET /dashboard` sirve una pagina que muestra la rafaga mientras pasa: como entran las metatx por
 HTTP, cuales quedan retenidas en el buffer de reordenamiento y en que orden salen finalmente al
 hub.
+
+> Documentacion completa del monitor -- arquitectura del bus de eventos, panel por panel, el
+> vocabulario de eventos que lo alimenta y una rafaga real analizada -- en
+> [`DASHBOARD.md`](./DASHBOARD.md).
 
 ```sh
 npm run dev                                  # el banner imprime la URL del dashboard
