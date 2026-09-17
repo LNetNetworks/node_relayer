@@ -18,11 +18,11 @@ pegarle.
 | | Go (`gas-relay-signer`) | Node (`simple_relay`) |
 |---|---|---|
 | Puerto por defecto | `9001` (`config.toml`, `[application].port`) | `3001` (`PORT`) |
-| Rutas HTTP | **una sola**: `/` (catch-all: cualquier path cae ahi) | `/`, `/info`, `/nonce/:address`, `/relay`, `/dashboard`, `/dashboard/stream` |
+| Rutas HTTP | `/`, `/info`, `/nonce/{address}`, `/relay`, y `/dashboard` + `/dashboard/stream` con el monitor encendido; `/` sigue siendo el catch-all | `/`, `/info`, `/nonce/:address`, `/relay`, `/dashboard`, `/dashboard/stream` |
 | Protocolo | JSON-RPC unicamente | JSON-RPC + REST + SSE + WebSocket |
 | Batch JSON-RPC | **no** (decodifica un objeto; un array no parsea) | si, y lo **parte**: escrituras al relayer, lecturas al nodo |
 | WebSocket | no | si, mismo puerto, con `eth_subscribe` / `eth_unsubscribe` |
-| CORS | no manda cabeceras: un dapp de browser no puede llamarlo directo | si (`CORS_ORIGIN`, default `*`) |
+| CORS | si, con los origenes de `[cors].allowedOrigins`; vacio -el default- no manda ninguna cabecera | si (`CORS_ORIGIN`, default `*`) |
 | Auth | no (NAAS agrega JWT en su fork) | no |
 | Metodos no interceptados | `method is not supported` | passthrough crudo al nodo |
 | Codigo de error JSON-RPC | `-32000` por defecto; el resto los pone el error tipado | `-32000` para `RelayError`; `-32600/-32601/-32602/-32603` segun el caso |
@@ -83,7 +83,7 @@ mano y para clientes que prefieren esperar el resultado en la misma llamada.
 | Respuesta | hash de la tx del nodo al hub | igual |
 | Espera al receipt | no | no (para eso esta `POST /relay`) |
 | Valida la firma | `v ∈ {27,28}`, si no `transaction must be signed pre-EIP155 (chainId=0, v=27 or 28)` (`processController.go:134`) | `validateMetaTxShape`: type 0, chainId 0, gasPrice 0, value 0, gasLimit > 0 |
-| Valida el sufijo del gas model | no mira `nodeAddress` ni `expiration` | los decodifica y valida (`ENFORCE_NODE_ADDRESS`, `MIN_EXPIRATION_SECONDS` + tolerancia) |
+| Valida el sufijo del gas model | los decodifica y valida, detras de `validation.enforceNodeAddress` y `validation.enforceExpiration`, apagados por defecto | los decodifica y valida (`ENFORCE_NODE_ADDRESS`, `MIN_EXPIRATION_SECONDS` + tolerancia), encendidos por defecto |
 | Valida el nonce | no: lo decide el hub on-chain | contra la reserva, incluyendo lo en vuelo |
 | Cupo de gas | si: `VerifyGasLimit` contra el cupo del nodo, con `metaTxGasLimit = len(data)*105 + 300000 + gasLimit` | no (solo lo informa `/info`) |
 | Permissioning del sender | si `permissionsEnabled`: `account sender is not permitted to send transactions` | si `ENFORCE_ACCOUNT_RULES`: `SENDER_NOT_PERMITTED` |
@@ -97,7 +97,7 @@ La diferencia con mas potencial de romper un cliente al migrar:
 | | Go | Node |
 |---|---|---|
 | `params[1] = "latest"` | nonce on-chain del hub | nonce on-chain del hub |
-| `params[1] = "pending"` | cache `senders` si hay entrada; si no, on-chain | `nextNonce`: on-chain + lo en vuelo, y con `AUTO_NONCE` **reserva** el numero |
+| `params[1] = "pending"` | tracker de lo en vuelo si hay cadena viva; si no, on-chain. Con `reorder.autoNonce` reparte el numero | `nextNonce`: on-chain + lo en vuelo, y con `AUTO_NONCE` **reserva** el numero |
 | **sin `params[1]`** | **se comporta como `latest`** (`processController.go:71`) | **se comporta como pending** (reserva) |
 | Otro valor (`"earliest"`, un numero de bloque) | error `parameter not defined, only pending or latest are allowed` | se trata como pending |
 | Sensible a mayusculas | no (`strings.ToUpper`) | si (`=== 'latest'`) |
@@ -147,8 +147,9 @@ curl -s http://localhost:3001/info
 `reorderWindowMs`, `autoNonce`, `autoNonceTicketMs`.
 
 De aca sale el `relayHubProxyAddress` que va como `trustedForwarder` de los contratos y el
-`minExpirationSeconds` que debe respetar la firma. En Go esos valores solo estan en `config.toml` y
-en el log de arranque.
+`minExpirationSeconds` que debe respetar la firma. Go informa lo mismo, y `accountRulesSource`
+distingue igual que aca una direccion configurada de una que publica el registro de permisos de la
+red; la diferencia que queda es `relayHubSource`, que en Go siempre sale del proxy.
 
 ### `GET /nonce/:address`
 
@@ -186,7 +187,9 @@ En Go el equivalente es de dos pasos: `eth_sendRawTransaction` y despues pollear
 
 Monitor en vivo (HTML + SSE), activo salvo `DASHBOARD=false`. El stream admite 8 clientes (si no,
 `503`), manda heartbeat cada 15 s y se reanuda con `?after=<seq>` o `last-event-id`. Solo lee el bus
-de eventos: no toca el camino de la metatx. Go no tiene nada equivalente (audit log a archivo).
+de eventos: no toca el camino de la metatx. Go tiene lo mismo desde `03-add-relay-dashboard`
+-misma pagina, mismo vocabulario de eventos, mismo techo de 8 clientes-, detras de
+`[dashboard].enabled`, apagado por defecto.
 
 ### WebSocket
 
