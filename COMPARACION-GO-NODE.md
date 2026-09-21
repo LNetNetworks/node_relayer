@@ -234,6 +234,26 @@ Son limitaciones conocidas, no bugs latentes, pero conviene tenerlas escritas:
   puede pasarse del cupo y quemar N tx del writer node con `MaxBlockGasLimit`.
 - **Costo de una cadena rota.** Cuando el hub rechaza la metatx k, las k+1..k+n ya salieron: cada una
   gasta una tx del writer node. `MAX_INFLIGHT_PER_USER` (16) acota el dano pero no lo evita.
+
+  **A quien descarta el cupo: diferencia deliberada con el de Go, desde 2026-09-20.** Este relayer
+  aplica el techo en la puerta, sobre la que llega (`src/relayer.ts:839-840`): con `inflight >= max`
+  se rechaza la peticion entrante, sin mirar su nonce. El criterio real termina siendo el orden de
+  llegada HTTP. El de Go hacia lo mismo -se heredo al portar- y dejo de hacerlo: ahora descarta la
+  de nonce **mas alto** entre las candidatas, y si la que llega trae un nonce menor que alguna
+  retenida, desaloja a la mas alta y le da su lugar.
+
+  El motivo es que las metatx de un usuario no son intercambiables: llevan nonces consecutivos que
+  el hub exige exactos, asi que descartar una del medio deja a todas las posteriores esperando un
+  nonce que ya nunca va a avanzar, mientras que descartar la mas alta no invalida ninguna. Medido
+  sobre el de Go con la politica vieja, rafagas de 8 metatx de un usuario con el cupo en 5, seis
+  corridas: 4, 3, 3, 1, 2, 3 minadas. Mismo input, mismo servicio, misma red, y el resultado cambiaba
+  segun el orden en que llegaron las peticiones. Con el descarte por nonce, lo que se descarta deja
+  de ser azar y la cadena que sale no tiene huecos.
+
+  Queda anotado como **diferencia deliberada y no como brecha pendiente de Go**: el cambio esta
+  documentado en `gas-management/openspec/changes/06-fix-inflight-eviction-by-nonce`. Lo que
+  corresponde es el reporte equivalente contra este relayer, para que la paridad no se rompa en la
+  direccion contraria.
 - **Open relay.** `/relay` y el JSON-RPC no autentican: cualquiera que alcance la URL consume el cupo
   de gas del writer node.
 
